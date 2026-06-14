@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(powershell -Command \"Stop-Process -Id 8792 -Force -ErrorAction SilentlyContinue\")",
+      "Bash(node -e \"const libs=['sharp','jimp','pngjs','canvas','upng-js','@napi-rs/canvas']; for\\(const l of libs\\){try{require.resolve\\(l\\); console.log\\('FOUND',l\\);}catch\\(e\\){console.log\\('missing',l\\);}}\")",
+      "Bash(node tmp/keygreen.mjs)",
+      "Bash(git rev-parse *)",
+      "Bash(ls -la assets)",
+      "Bash(ls -la tmp)",
+      "Bash(ls -la src)",
+      "Bash(ls -la public)",
+      "Bash(mkdir -p tools)",
+      "Bash(mv tmp/keygreen.mjs tools/keygreen.mjs)",
+      "Bash(rm -f assets/character_sheet.png assets/hybrid_body_8dir.png assets/player_idle_8dir.png assets/player_walk_8dir.png)",
+      "Bash(rm -rf tmp work dist)"
+    ]
+  }
+}
