@@ -28,6 +28,10 @@ const ARM_X = BODY_W / 2 - 0.03; // shoulder pivot tucked inside the torso edge
 const CAMERA_HEIGHT = 7.0;
 const CAMERA_RADIUS = Math.hypot(6.5, 8.0);
 const INITIAL_CAMERA_YAW = Math.atan2(6.5, 8.0);
+// Camera follow as a time-based exponential decay (per second) instead of a fixed
+// per-frame lerp factor, so the smoothing is frame-rate independent. ~7.7 matches
+// the previous feel of `lerp(..., 0.12)` at 60fps: 1 - exp(-7.7/60) ≈ 0.12.
+const CAMERA_FOLLOW_RATE = 7.7;
 const swingAxis = new THREE.Vector3(); // reused: per-direction limb swing axis
 
 // Front-face texture windows. The sprite art is NOT centered in each cell and its
@@ -216,6 +220,12 @@ const player = {
   moveStart: new THREE.Vector3(),
   moveEnd: new THREE.Vector3(),
   moveElapsed: 0,
+  // Normalized segment-progress velocities (0 = start/stop at rest, 1 = cruise) at
+  // the two ends of the current tile segment. They let consecutive tiles join with
+  // matching velocity so continuous walking cruises at constant speed instead of
+  // re-easing (stop-start) at every grid boundary.
+  segEntryVel: 0,
+  segExitVel: 0,
   walkTime: 0,
   animTime: 0,
 };
@@ -270,7 +280,7 @@ function frame(delta) {
   player.walkTime += player.state === "walking" ? delta : -player.walkTime;
   player.animTime += delta;
   updatePlayerAnimation();
-  updateCamera(false);
+  updateCamera(false, delta);
   updateCharacterFacing();
   updateDebug();
   renderer.render(scene, camera);
@@ -439,6 +449,16 @@ function tryStartMove() {
     return;
   }
 
+  // Entry velocity: cruise (1) if this segment continues a walk already in motion,
+  // otherwise ease in from rest (0).
+  player.segEntryVel = player.state === "walking" ? 1 : 0;
+  // Exit velocity: cruise (1) if the same input would carry us into a valid next
+  // tile, so we pass through the boundary at speed; otherwise ease out to a stop.
+  // (If the key is released mid-segment we just finish at cruise and stop once —
+  // a single stop, not the per-tile pulsing this avoids.)
+  const nextTarget = { x: target.x + worldDelta.x, z: target.z + worldDelta.z };
+  player.segExitVel = canMoveTo(target, nextTarget, worldDelta) ? 1 : 0;
+
   player.moving = true;
   player.moveElapsed = 0;
   player.moveStart.copy(playerRoot.position);
@@ -447,21 +467,41 @@ function tryStartMove() {
   setPlayerState("walking");
 }
 
+// Hermite interpolation of segment progress with the two endpoint velocities.
+// m0=m1=0 -> smoothstep (isolated step); m0=0,m1=1 -> ease-in only; m0=1,m1=0 ->
+// ease-out only; m0=m1=1 -> linear (constant-speed cruise). Adjacent segments that
+// share a velocity (e.g. both 1) therefore join without a velocity discontinuity.
+function easeSegment(t, m0, m1) {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) + (t3 - t2) * m1;
+}
+
 function updateMovement(delta) {
   player.moveElapsed += delta;
-  const t = Math.min(player.moveElapsed / MOVE_DURATION, 1);
-  const eased = t * t * (3 - 2 * t);
-  playerRoot.position.lerpVectors(player.moveStart, player.moveEnd, eased);
-  updateShadowPosition();
 
-  if (t >= 1) {
-    player.moving = false;
+  // Cross any completed tile boundaries, carrying the leftover time into the next
+  // segment so continuous walking doesn't lose a sliver of a frame at each tile.
+  while (player.moving && player.moveElapsed >= MOVE_DURATION) {
+    const overshoot = player.moveElapsed - MOVE_DURATION;
+    playerRoot.position.copy(player.moveEnd);
     snapPlayerToGrid();
+    player.moving = false;
     if (getScreenInputVector()) {
       tryStartMove();
+      if (player.moving) {
+        player.moveElapsed = overshoot;
+      }
     } else {
       setPlayerState("idle");
     }
+  }
+
+  if (player.moving) {
+    const t = Math.min(player.moveElapsed / MOVE_DURATION, 1);
+    const eased = easeSegment(t, player.segEntryVel, player.segExitVel);
+    playerRoot.position.lerpVectors(player.moveStart, player.moveEnd, eased);
+    updateShadowPosition();
   }
 }
 
@@ -581,7 +621,7 @@ function getPlayerGroundY(x, z) {
   return getHeight(x, z) + CHAR_CLEARANCE;
 }
 
-function updateCamera(immediate) {
+function updateCamera(immediate, delta = 0) {
   const target = playerRoot.position.clone();
   target.y += 0.55;
   const desiredPosition = target.clone().add(
@@ -595,7 +635,10 @@ function updateCamera(immediate) {
   if (immediate) {
     camera.position.copy(desiredPosition);
   } else {
-    camera.position.lerp(desiredPosition, 0.12);
+    // Frame-rate-independent exponential smoothing: the fraction covered this frame
+    // depends on elapsed time, so the follow speed is the same at 30, 60 or 144 fps.
+    const alpha = 1 - Math.exp(-CAMERA_FOLLOW_RATE * delta);
+    camera.position.lerp(desiredPosition, alpha);
   }
 
   camera.lookAt(target);
