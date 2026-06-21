@@ -338,27 +338,6 @@ function frame(delta) {
 
 renderer.setAnimationLoop(() => frame(clock.getDelta()));
 
-// TEMP debug handle for offscreen screenshots (remove after capture session).
-// When the preview tab is hidden, requestAnimationFrame pauses and the WebGL
-// canvas goes blank; this keeps the surface refreshed and lets eval set a facing.
-window.__lab = {
-  face(direction) {
-    player.direction = direction;
-    setHybridDirection(direction);
-    updatePlayerAnimation();
-    renderer.render(scene, camera);
-  },
-  render() {
-    updatePlayerAnimation();
-    renderer.render(scene, camera);
-  },
-};
-setInterval(() => {
-  if (document.hidden) {
-    renderer.render(scene, camera);
-  }
-}, 100);
-
 function loadPixelTexture(url) {
   const texture = textureLoader.load(url);
   texture.magFilter = THREE.NearestFilter;
