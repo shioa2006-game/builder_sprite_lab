@@ -99,10 +99,61 @@ node tools/keygreen.mjs
 - 接地: `CHAR_CLEARANCE`（足と地面の隙間）／影は `playerShadow` の `scale`・`opacity`
 - カメラ・向き: `CAMERA_OFFSET`（厚みの見え方が変わる。`FIXED_YAW` も連動）
 
+### 右手ハンマー
+
+右手（`hammerMount`）に追従するハンマー。`updateHammerAttachment()` が毎フレーム、右手の
+ワールド位置へハンマー本体を置き、向きを更新します（歩行スイングにも追従）。
+向きは **2つの独立した系** で決めています。
+
+- **柄の向き** = `HAMMER_DIRECTION_ANGLE[dir]`。ハンマー群全体を Z 軸まわりに回し、柄を
+  画面上の進行方向へ向けます。後ろ・斜め後ろはヘッドが**上を向く**角度にしてあり、
+  地面へのめり込みを避けます。
+- **ヘッドの向き**（`HAMMER_HEAD_STRIKE_LEAN` ＋ `updateHammerAttachment()` 内の計算）。
+  ハンマーは「**進行方向の地面を、円柱のキャップ（円の面）でたたく**」道具です。これを満たすため、
+  円柱の軸は次の2条件で決めます。
+  1. **常に柄に垂直**（実物のハンマー／木槌と同じ。柄は円柱の側面に当たり、円の面には刺さらない）
+  2. できるだけ「**下（地面）＋進行方向**」を向く（＝キャップが進行方向の地面をたたく向き）
+
+  具体的には、進行方向 `(fx, 0, fz)`（`FACING`。x=画面右, z=カメラ手前）を下方向 -Y へ
+  傾けた「打撃ベクトル」を作り、それを**柄に垂直な平面へ射影**して軸とします。
+  - 柄が縦のとき（front/back）→ 下成分が打ち消され、キャップは進行方向（手前/奥）を向く
+  - 柄が横のとき（left/right）→ 進行成分が打ち消され、キャップは真下を向く（円柱が立つ）
+  - 斜めはその中間
+
+  `FACING` の進行方向を使うのが要点で、`front_right` と `back_right` のように**柄角度が同じ**
+  方向でも、キャップが「手前下」か「奥下」かを正しく区別できます（柄まわりの回転角だけでは
+  区別できませんでした）。`STRIKE_LEAN` は進行成分と下成分の重みです。
+  実装は `setFromUnitVectors` で目標クォータニオンにして
+  `head.quaternion = hammerGroup.quaternion⁻¹ × desired` としてヘッドへ直接適用します
+  （柄の回転から独立。`head.rotation.z` を柄回転に重ねる旧案は斜めでジンバル破綻しました）。
+  ※ 円柱は自身の軸まわりに対称なので、旧 `head.rotation.y` 方式は見た目が変わりませんでした。
+
+関連: `createHammerPart()`, `setHammerPose()`, `HAMMER_MOUNT_Z`（方向ごとの前後位置微調整）。
+
 ### 今後の改善ポイント
 
 - 歩行が単一フレームのスイングのみ。踏み込みに合わせた接地・反動を足すと向上。
 - `THREE.Clock` は非推奨警告が出ます（`THREE.Timer` へ移行可能）。
+
+## デバッグ用フック（スクショ駆動の調整）
+
+向きごとの見た目（特にハンマー）をスクリーンショットで確認・調整するための仕組みです。
+
+- `WebGLRenderer` は `preserveDrawingBuffer: true` で生成しています。これが無いと
+  ヘッドレスのスクリーンショット取得が固まる（空フレームになる）ため必須です。
+- ブラウザのコンソール / 自動化から `window.__hammerDebug` を利用できます。
+  - `setDir(dir)` … 移動せずに向きだけ切替（`'front'`, `'front_right'`, `'right'`,
+    `'back_right'`, `'back'`, `'back_left'`, `'left'`, `'front_left'`）
+  - `pause()` / `resume()` … アニメーションループの停止 / 再開
+  - `renderOnce()` … 1フレームだけ描画
+  - `zoom(radius=2.4, height=1.6)` … ループを止め、現在のカメラヨー方向からキャラへ
+    寄せて1フレーム描画（寄り絵のスクショ用）
+
+  例: `__hammerDebug.setDir('right'); __hammerDebug.zoom();` の後にスクショを撮る。
+
+これらは開発・調整専用です（`src/main.js`、`hammerToggle` リスナー付近と
+`setAnimationLoop` 直後に定義）。本番に不要なら `window.__hammerDebug` 一式と
+`preserveDrawingBuffer` を外してください。
 
 ## ディレクトリ構成
 

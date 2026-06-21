@@ -34,6 +34,11 @@ const INITIAL_CAMERA_YAW = Math.atan2(6.5, 8.0);
 const CAMERA_FOLLOW_RATE = 7.7;
 const swingAxis = new THREE.Vector3(); // reused: per-direction limb swing axis
 const hammerMountWorld = new THREE.Vector3(); // reused: right-hand grip world position
+const HAMMER_HEAD_UP = new THREE.Vector3(0, 1, 0); // cylinder geometry's local axis
+const hammerHeadAxis = new THREE.Vector3(); // reused: target cylinder-axis direction
+const hammerHandleDir = new THREE.Vector3(); // reused: handle direction (char frame)
+const hammerStrikeDir = new THREE.Vector3(); // reused: desired strike (travel + down)
+const hammerHeadQuat = new THREE.Quaternion(); // reused: desired head orientation
 
 // Front-face texture windows. The sprite art is NOT centered in each cell and its
 // horizontal center shifts per direction, so the center (cx, measured from the
@@ -100,16 +105,16 @@ const HAMMER_DIRECTION_ANGLE = {
   left: 0,
   front_left: -Math.PI / 4,
 };
-const HAMMER_HEAD_YAW = {
-  front: Math.PI / 2,
-  front_right: Math.PI / 6,
-  right: 0,
-  back_right: Math.PI / 6,
-  back: Math.PI / 2,
-  back_left: Math.PI / 6,
-  left: 0,
-  front_left: Math.PI / 6,
-};
+// Cylinder-head facing. A hammer strikes the ground in the travel direction with
+// its round cap, and the head crosses the shaft (the shaft never pierces the cap),
+// so the cylinder axis must (a) stay PERPENDICULAR to the handle and (b) point as
+// close as possible to "down + along the travel direction". We build that strike
+// target, then project it onto the plane perpendicular to the handle to get the
+// axis. Because the travel direction comes from FACING, front_X and back_X are
+// distinguished even when they share a handle angle (e.g. front_right vs back_right
+// both use a -3PI/4 handle, but the cap leans toward vs away from the camera).
+// STRIKE_LEAN weights the travel component against the downward (ground) one.
+const HAMMER_HEAD_STRIKE_LEAN = 1.0;
 
 // Palette pulled from the sprite so the 3D parts / box sides don't clash.
 const COLORS = {
@@ -183,7 +188,7 @@ scene.background = new THREE.Color(0x8fb5c9);
 scene.fog = new THREE.Fog(0x8fb5c9, 16, 28);
 
 const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 100);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -290,6 +295,18 @@ hammerToggle?.addEventListener("change", () => {
   updateHammerVisibility();
 });
 
+// --- debug hook (screenshot-driven hammer tuning) ----------------------------
+window.__hammerDebug = {
+  setDir(direction) {
+    player.direction = direction;
+    setHybridDirection(direction);
+    updateHammerAttachment();
+  },
+  get angle() {
+    return { dir: HAMMER_DIRECTION_ANGLE, lean: HAMMER_HEAD_STRIKE_LEAN };
+  },
+};
+
 window.addEventListener("keydown", (event) => {
   const cameraRotateDirection = getCameraRotateDirection(event);
   if (isMovementKey(event.key)) {
@@ -337,6 +354,26 @@ function frame(delta) {
 }
 
 renderer.setAnimationLoop(() => frame(clock.getDelta()));
+
+// Debug: pause/resume the render loop so headless screenshots don't wait forever
+// for an idle frame. Renders a single frame on demand while paused.
+window.__hammerDebug.pause = () => renderer.setAnimationLoop(null);
+window.__hammerDebug.resume = () => renderer.setAnimationLoop(() => frame(clock.getDelta()));
+window.__hammerDebug.renderOnce = () => renderer.render(scene, camera);
+// Close-up screenshot helper: pause loop, place camera near the character along the
+// current orbit yaw, aim at the torso, render one frame.
+window.__hammerDebug.zoom = (radius = 2.4, height = 1.6) => {
+  renderer.setAnimationLoop(null);
+  const target = playerRoot.position.clone();
+  target.y += 0.45;
+  camera.position.set(
+    target.x + Math.sin(cameraOrbit.yaw) * radius,
+    target.y + height,
+    target.z + Math.cos(cameraOrbit.yaw) * radius,
+  );
+  camera.lookAt(target);
+  renderer.render(scene, camera);
+};
 
 function loadPixelTexture(url) {
   const texture = textureLoader.load(url);
@@ -497,7 +534,26 @@ function updateHammerAttachment() {
   character.group.worldToLocal(hammerMountWorld);
   character.hammer.position.copy(hammerMountWorld);
   character.hammer.rotation.set(0.08, 0, HAMMER_DIRECTION_ANGLE[player.direction]);
-  character.hammer.userData.head.rotation.y = HAMMER_HEAD_YAW[player.direction];
+  // Orient the cylinder head so its cap strikes the ground in the travel direction
+  // while staying perpendicular to the handle. Handle dir = hammer-local -X spun by
+  // its Z rotation (theta). Strike target = travel-on-screen (FACING: x right,
+  // z toward camera) leaning into the ground (-Y). Project the strike target onto
+  // the plane perpendicular to the handle -> the axis. For a vertical handle the
+  // down part cancels and the cap faces along travel (front/back); for a horizontal
+  // handle the travel part cancels and the cap faces down (left/right); diagonals
+  // blend. Expressed relative to the (already rotated) hammer group.
+  const theta = HAMMER_DIRECTION_ANGLE[player.direction];
+  hammerHandleDir.set(-Math.cos(theta), -Math.sin(theta), 0); // handle points here
+  const [fx, fz] = FACING[player.direction];
+  hammerStrikeDir.set(fx * HAMMER_HEAD_STRIKE_LEAN, -1, fz * HAMMER_HEAD_STRIKE_LEAN);
+  // remove the component along the handle so the axis is exactly perpendicular to it
+  hammerStrikeDir.addScaledVector(hammerHandleDir, -hammerStrikeDir.dot(hammerHandleDir));
+  hammerHeadAxis.copy(hammerStrikeDir).normalize();
+  hammerHeadQuat.setFromUnitVectors(HAMMER_HEAD_UP, hammerHeadAxis);
+  character.hammer.userData.head.quaternion
+    .copy(character.hammer.quaternion)
+    .invert()
+    .multiply(hammerHeadQuat);
 }
 
 // Cheap silhouette: a slightly larger back-faced black shell behind the mesh.
