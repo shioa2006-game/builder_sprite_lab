@@ -33,6 +33,7 @@ const INITIAL_CAMERA_YAW = Math.atan2(6.5, 8.0);
 // the previous feel of `lerp(..., 0.12)` at 60fps: 1 - exp(-7.7/60) ≈ 0.12.
 const CAMERA_FOLLOW_RATE = 7.7;
 const swingAxis = new THREE.Vector3(); // reused: per-direction limb swing axis
+const hammerMountWorld = new THREE.Vector3(); // reused: right-hand grip world position
 
 // Front-face texture windows. The sprite art is NOT centered in each cell and its
 // horizontal center shifts per direction, so the center (cx, measured from the
@@ -73,6 +74,42 @@ const ARM_SEP = 0.14;
 const LEG_LIFT = 0.08; // raise leg attach so the tops embed into the body
 const ARM_REST_TILT = 0.34; // rad (~19deg): arms angle outward from the shoulder
 const LIMB_DEPTH_SCALE = 0.42; // compress front-back separation (the character is thin)
+const HAMMER_HANDLE_LENGTH = 0.36;
+const HAMMER_HEAD_RADIUS = 0.075;
+const HAMMER_HEAD_H = 0.25;
+const HAMMER_GRIP_Y = -0.265;
+const HAMMER_MOUNT_Z = {
+  front: 0.035,
+  front_right: 0.035,
+  right: 0.04,
+  back_right: -0.035,
+  back: -0.045,
+  back_left: -0.055,
+  left: 0.04,
+  front_left: -0.04,
+};
+// The hammer mesh is built along local -X, so each angle points that -X axis in
+// the character's 8-way facing direction on screen.
+const HAMMER_DIRECTION_ANGLE = {
+  front: -Math.PI / 2,
+  front_right: (-Math.PI * 3) / 4,
+  right: Math.PI,
+  back_right: (-Math.PI * 3) / 4,
+  back: -Math.PI / 2,
+  back_left: 0,
+  left: 0,
+  front_left: -Math.PI / 4,
+};
+const HAMMER_HEAD_YAW = {
+  front: Math.PI / 2,
+  front_right: Math.PI / 6,
+  right: 0,
+  back_right: Math.PI / 6,
+  back: Math.PI / 2,
+  back_left: Math.PI / 6,
+  left: 0,
+  front_left: Math.PI / 6,
+};
 
 // Palette pulled from the sprite so the 3D parts / box sides don't clash.
 const COLORS = {
@@ -81,6 +118,9 @@ const COLORS = {
   jacketBlue: 0x2f63a8,
   jacketBlueDark: 0x21477c,
   glove: 0x7b4a22,
+  hammerGrip: 0xaa0000,
+  steel: 0xaeb6bb,
+  steelDark: 0x687176,
   pants: 0xd8c79c,
   boot: 0x6b3f1d,
   back: 0x394a63,
@@ -135,6 +175,7 @@ const terrainHeights = [
 const debugGrid = document.querySelector("#debug-grid");
 const debugDirection = document.querySelector("#debug-direction");
 const debugState = document.querySelector("#debug-state");
+const hammerToggle = document.querySelector("#hammer-toggle");
 
 const app = document.querySelector("#app");
 const scene = new THREE.Scene();
@@ -212,8 +253,11 @@ playerShadow.scale.set(1.25, 1, 0.82); // horizontal ellipse
 scene.add(playerShadow);
 
 const keys = new Set();
+const equipment = {
+  hammer: true,
+};
 const player = {
-  grid: { x: 7, z: 8 },
+  grid: { x: 4, z: 8 },
   direction: "front",
   state: "idle",
   moving: false,
@@ -234,11 +278,17 @@ const cameraOrbit = {
 };
 
 setHybridDirection(player.direction);
+updateHammerVisibility();
 snapPlayerToGrid();
 updateCamera(true);
 updateCharacterFacing();
 updatePlayerAnimation();
 updateDebug();
+
+hammerToggle?.addEventListener("change", () => {
+  equipment.hammer = hammerToggle.checked;
+  updateHammerVisibility();
+});
 
 window.addEventListener("keydown", (event) => {
   const cameraRotateDirection = getCameraRotateDirection(event);
@@ -288,6 +338,27 @@ function frame(delta) {
 
 renderer.setAnimationLoop(() => frame(clock.getDelta()));
 
+// TEMP debug handle for offscreen screenshots (remove after capture session).
+// When the preview tab is hidden, requestAnimationFrame pauses and the WebGL
+// canvas goes blank; this keeps the surface refreshed and lets eval set a facing.
+window.__lab = {
+  face(direction) {
+    player.direction = direction;
+    setHybridDirection(direction);
+    updatePlayerAnimation();
+    renderer.render(scene, camera);
+  },
+  render() {
+    updatePlayerAnimation();
+    renderer.render(scene, camera);
+  },
+};
+setInterval(() => {
+  if (document.hidden) {
+    renderer.render(scene, camera);
+  }
+}, 100);
+
 function loadPixelTexture(url) {
   const texture = textureLoader.load(url);
   texture.magFilter = THREE.NearestFilter;
@@ -308,8 +379,9 @@ function createHybridPlayer() {
   const rightArm = createArmPart(1);
   const leftLeg = createLegPart(-1);
   const rightLeg = createLegPart(1);
-  group.add(head.group, body.group, leftArm, rightArm, leftLeg, rightLeg);
-  return { group, head, body, leftArm, rightArm, leftLeg, rightLeg };
+  const hammer = createHammerPart();
+  group.add(hammer, head.group, body.group, leftArm, rightArm, leftLeg, rightLeg);
+  return { group, head, body, leftArm, rightArm, leftLeg, rightLeg, hammer };
 }
 
 // Box ordered: +X, -X, +Y, -Y, +Z(front), -Z(back). The front face carries the
@@ -381,9 +453,12 @@ function createArmPart(side) {
   upper.position.y = -0.12;
   const glove = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), gloveMat); // ~2/3 width
   glove.position.y = -0.26;
+  const hammerMount = new THREE.Group();
   limb.add(upper, glove);
   pivot.add(limb);
+  pivot.add(hammerMount);
   pivot.userData.tiltGroup = limb; // so setLimbLayout can re-aim the splay per direction
+  pivot.userData.hammerMount = hammerMount;
   addOutline(upper, 1.14);
   addOutline(glove, 1.1);
   return pivot;
@@ -406,6 +481,44 @@ function createLegPart(side) {
   addOutline(thigh, 1.1);
   addOutline(boot, 1.08, 0.008); // constant-width border so the short boot keeps a clear outline
   return pivot;
+}
+
+function createHammerPart() {
+  const group = new THREE.Group();
+  group.name = "right-hand-hammer";
+
+  const handleMat = new THREE.MeshToonMaterial({ color: COLORS.hammerGrip });
+  const headMat = new THREE.MeshToonMaterial({ color: COLORS.steel });
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(HAMMER_HANDLE_LENGTH, 0.055, 0.055), handleMat);
+  handle.position.x = -HAMMER_HANDLE_LENGTH / 2;
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(HAMMER_HEAD_RADIUS, HAMMER_HEAD_RADIUS, HAMMER_HEAD_H, 16), headMat);
+  head.position.x = -HAMMER_HANDLE_LENGTH - HAMMER_HEAD_RADIUS + 0.015;
+
+  group.add(handle, head);
+  addOutline(handle, 1.12);
+  addOutline(head, 1.08);
+  group.userData.head = head;
+  group.userData.baseY = 0;
+  return group;
+}
+
+function setHammerPose(direction) {
+  const mount = character.leftArm.userData.hammerMount;
+  const armTilt = character.leftArm.userData.tiltGroup.rotation.z;
+  mount.position.set(-HAMMER_GRIP_Y * Math.sin(armTilt), HAMMER_GRIP_Y * Math.cos(armTilt), HAMMER_MOUNT_Z[direction]);
+  updateHammerAttachment();
+}
+
+function updateHammerVisibility() {
+  character.hammer.visible = equipment.hammer;
+}
+
+function updateHammerAttachment() {
+  character.leftArm.userData.hammerMount.getWorldPosition(hammerMountWorld);
+  character.group.worldToLocal(hammerMountWorld);
+  character.hammer.position.copy(hammerMountWorld);
+  character.hammer.rotation.set(0.08, 0, HAMMER_DIRECTION_ANGLE[player.direction]);
+  character.hammer.userData.head.rotation.y = HAMMER_HEAD_YAW[player.direction];
 }
 
 // Cheap silhouette: a slightly larger back-faced black shell behind the mesh.
@@ -578,6 +691,7 @@ function setHybridDirection(direction) {
   setCellWindow(headTexture, frame, c.h - HEAD_HALF_U, c.h + HEAD_HALF_U, HEAD_V.v0, HEAD_V.v1);
   setCellWindow(bodyTexture, frame, c.b - BODY_HALF_U, c.b + BODY_HALF_U, BODY_V.v0, BODY_V.v1);
   setLimbLayout(direction);
+  setHammerPose(direction);
 }
 
 // Map a sub-rectangle (0..1 within one direction cell) onto a texture's UV transform.
@@ -686,6 +800,7 @@ function updatePlayerAnimation() {
   character.head.group.position.y = HEAD_CY + headBob;
   character.leftArm.position.y = SHOULDER_Y + bob;
   character.rightArm.position.y = SHOULDER_Y + bob;
+  updateHammerAttachment();
 }
 
 function updateDebug() {
