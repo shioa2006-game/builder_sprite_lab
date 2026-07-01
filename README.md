@@ -33,16 +33,17 @@ npm.cmd run build
 
 | ファイル | 役割 |
 | --- | --- |
-| `assets/player_body_8dir.png` | **使用中**。頭＋胴体を腰まで・腕脚なしの8方向シート（4列×2行）。透過付き。 |
-| `assets/player_image.png` | 生成元。背景がクロマグリーンで透過なし。 |
+| `assets/adventurer_boy_body_8dir.png` | **使用中**。頭＋肩/胸までのバスト8方向シート（4列×2行、128pxセル）。最初から透過（RGBA）。各セル中央配置。 |
+| `assets/player_body_8dir.png` | 旧・使用中スプライト（バックアップとして保持）。 |
+| `assets/player_image.png` | `player_body_8dir.png` の生成元（クロマグリーン）。 |
 
-`player_body_8dir.png` は `player_image.png` から `tools/keygreen.mjs` で生成します
-（緑→アルファ変換＋エッジのデスピル）。元画像を更新したら再生成してください:
+現行スプライト（`adventurer_boy_body_8dir.png`）は**透過済みなので変換不要**。`src/main.js` の
+`bodySheetUrl` が直接参照します。セル配置は旧シートと同じで、行0が左回り
+（front, front_left, left, back_left）、行1が右回り（back, back_right, right, front_right）
+＝front/back は列0（`DIRECTIONS`）。
 
-```powershell
-npm.cmd install pngjs --no-save
-node tools/keygreen.mjs
-```
+旧スプライトは緑スクリーン方式で、`player_image.png` から `tools/keygreen.mjs`
+（緑→アルファ変換＋デスピル）で生成していました。現行art では使いません。
 
 ## キャラクター表現（2.5Dデフォルメ人形）
 
@@ -74,9 +75,11 @@ node tools/keygreen.mjs
 
 ### 前面テクスチャのUV窓
 
-スプライトはセル内で水平方向の中心がずれているため、方向ごとの実測中心 `ART_CENTERS`
-（頭 `h` / 胴 `b`）に窓を合わせます。`HEAD_HALF_U` / `BODY_HALF_U` が窓の半幅、
-`HEAD_V` / `BODY_V` が縦の範囲です。
+各セルから頭バンド／胴バンドを切り出して、それぞれ頭ボックス／胴ボックスの前面に貼ります。
+`ART_CENTERS`（頭 `h` / 胴 `b`）が窓の水平中心、`HEAD_HALF_U` / `BODY_HALF_U` が半幅、
+`HEAD_V` / `BODY_V` が縦範囲（セル下端が v=0）。現行スプライトは各セル中央配置なので
+`ART_CENTERS` はほぼ一律（≈0.49）。縦は首≈0.41で頭/胴を分割しています。
+テクスチャは `LinearFilter`（高精細アートを滑らかに。ミップマップはセル混色を避けるため無効）。
 
 ### 主な関数
 

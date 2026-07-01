@@ -11,12 +11,12 @@ const CAMERA_ROTATE_STEP = Math.PI / 4;
 // the terrain top, and the boots are built to reach back down to the ground.
 const CHAR_CLEARANCE = 0.04; // boots-to-ground gap so feet read as planted
 const HIP_Y = 0.12; // hip / leg-attach height; legs are short stubs down to the ground
-const BODY_W = 0.46;
-const BODY_H = 0.42;
+const BODY_W = 0.5;
+const BODY_H = 0.4;
 const BODY_D = 0.08;
 const BODY_CY = HIP_Y + BODY_H / 2;
 const SHOULDER_Y = HIP_Y + BODY_H - 0.06;
-const HEAD_W = 0.56;
+const HEAD_W = 0.6;
 const HEAD_H = 0.5;
 const HEAD_D = 0.07;
 const HEAD_CY = HIP_Y + BODY_H + HEAD_H / 2 - 0.08; // slight overlap with the body box
@@ -47,19 +47,24 @@ const hammerHeadQuat = new THREE.Quaternion(); // reused: desired head orientati
 // the neck to the exact cap top so the box top aligns with the hat; the body band
 // runs from the shoulders down to the hips (the sheet has no arms, so the full
 // torso width can be shown).
-const HEAD_HALF_U = 0.24; // half-width of the head window (cell fraction)
-const BODY_HALF_U = 0.19; // half-width of the torso window
-const HEAD_V = { v0: 0.575, v1: 0.93 };
-const BODY_V = { v0: 0.3, v1: 0.58 };
+const HEAD_HALF_U = 0.34; // half-width of the head window (cell fraction)
+const BODY_HALF_U = 0.25; // half-width of the torso window
+// v measured from the cell BOTTOM. New art: cap top ~0.955, neck ~0.41, art bottom
+// ~0.055. Head band = neck..cap; body band = art bottom..shoulders (they overlap a
+// little at the neck so the boxes read as continuous).
+const HEAD_V = { v0: 0.4, v1: 0.955 };
+const BODY_V = { v0: 0.05, v1: 0.45 };
+// The bust art is centered in every cell (hCenter ~0.49-0.50), so the windows use a
+// near-uniform center instead of the old per-direction offsets.
 const ART_CENTERS = {
-  front: { h: 0.6, b: 0.607 },
-  front_right: { h: 0.35, b: 0.375 },
-  right: { h: 0.445, b: 0.468 },
-  back_right: { h: 0.517, b: 0.517 },
-  back: { h: 0.609, b: 0.607 },
-  back_left: { h: 0.383, b: 0.389 },
-  left: { h: 0.509, b: 0.486 },
-  front_left: { h: 0.563, b: 0.542 },
+  front: { h: 0.492, b: 0.492 },
+  front_right: { h: 0.496, b: 0.496 },
+  right: { h: 0.492, b: 0.492 },
+  back_right: { h: 0.496, b: 0.496 },
+  back: { h: 0.492, b: 0.492 },
+  back_left: { h: 0.492, b: 0.492 },
+  left: { h: 0.496, b: 0.496 },
+  front_left: { h: 0.5, b: 0.5 },
 };
 
 // Facing vector per direction in billboard-local ground plane (x = screen right,
@@ -118,33 +123,37 @@ const HAMMER_HEAD_STRIKE_LEAN = 1.0;
 
 // Palette pulled from the sprite so the 3D parts / box sides don't clash.
 const COLORS = {
-  capBlue: 0x3358a6,
-  capBlueDark: 0x223f74,
-  jacketBlue: 0x2f63a8,
-  jacketBlueDark: 0x21477c,
+  capBlue: 0x2f5db0, // sampled from the new bust: beret blue
+  capBlueDark: 0x203f74,
+  jacketBlue: 0x2856a8, // armor/shoulder blue (3D sleeves continue from the shoulders)
+  jacketBlueDark: 0x1c3f78,
   glove: 0x7b4a22,
   hammerGrip: 0xaa0000,
   steel: 0xaeb6bb,
   steelDark: 0x687176,
-  pants: 0xd8c79c,
+  pants: 0xc9b78e,
   boot: 0x6b3f1d,
-  back: 0x394a63,
+  back: 0x24467e, // dark blue behind the torso
   outline: 0x14110f,
 };
 
-// Torso-only sheet (head + body down to the hips, no arms, no legs). Generated
-// from assets/player_image.png by tmp/keygreen.mjs (chroma-green -> alpha).
-const bodySheetUrl = new URL("../assets/player_body_8dir.png", import.meta.url).href;
+// Bust sheet (head + shoulders/chest, no arms, no legs). Already transparent
+// (RGBA), so no chroma-key step: referenced directly. 4x2 grid, 128px cells,
+// art centered in each cell.
+const bodySheetUrl = new URL("../assets/adventurer_boy_body_8dir.png", import.meta.url).href;
 
+// The bust sheet uses the same cell layout as the original sheet. Row 0 turns
+// left: front, front_left, left, back_left. Row 1 turns right: back, back_right,
+// right, front_right. (front/back sit in column 0.)
 const DIRECTIONS = {
   front: { col: 0, row: 0 },
-  front_right: { col: 3, row: 1 },
-  right: { col: 2, row: 1 },
-  back_right: { col: 1, row: 1 },
-  back: { col: 0, row: 1 },
-  back_left: { col: 3, row: 0 },
-  left: { col: 2, row: 0 },
   front_left: { col: 1, row: 0 },
+  left: { col: 2, row: 0 },
+  back_left: { col: 3, row: 0 },
+  back: { col: 0, row: 1 },
+  back_right: { col: 1, row: 1 },
+  right: { col: 2, row: 1 },
+  front_right: { col: 3, row: 1 },
 };
 
 const INPUT_TO_DIRECTION = new Map([
@@ -377,8 +386,11 @@ window.__hammerDebug.zoom = (radius = 2.4, height = 1.6) => {
 
 function loadPixelTexture(url) {
   const texture = textureLoader.load(url);
-  texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
+  // The bust art is high-detail with anti-aliased outlines, so sample it smoothly.
+  // No mipmaps: on this atlas a mipmapped minFilter would blend neighbouring cells.
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.colorSpace = THREE.SRGBColorSpace;
