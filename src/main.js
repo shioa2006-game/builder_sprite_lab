@@ -145,6 +145,10 @@ const bodySheetUrl = new URL("../assets/adventurer_boy_body_8dir.png", import.me
 // The bust sheet uses the same cell layout as the original sheet. Row 0 turns
 // left: front, front_left, left, back_left. Row 1 turns right: back, back_right,
 // right, front_right. (front/back sit in column 0.)
+// Canonical cell<->key<->direction table is in README (§スプライトのセル対応).
+// Quick reference (cell# = left-to-right, top-to-bottom):
+//   1 S/↓ front    2 A+S/↙ front_left  3 A/← left     4 A+W/↖ back_left
+//   5 W/↑ back     6 D+W/↗ back_right  7 D/→ right     8 D+S/↘ front_right
 const DIRECTIONS = {
   front: { col: 0, row: 0 },
   front_left: { col: 1, row: 0 },
