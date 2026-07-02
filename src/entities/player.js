@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { Entity, GRAVITY } from "./entity.js";
 import { HumanoidRig } from "./rig.js";
 import { ITEMS } from "../game/items.js";
+import { clamp } from "../core/utils.js";
 
 const SHEET_URL = new URL("../../assets/adventurer_boy_body_8dir.png", import.meta.url).href;
 
@@ -78,15 +79,25 @@ export class Player extends Entity {
     }
 
     if (this.inWater) {
-      this.vel.y += GRAVITY * 0.25 * dt;
-      this.vel.y = Math.max(this.vel.y, -2.5);
-      if (wantJump) this.vel.y = 3.2;
+      if (wantJump) {
+        // Swim up / leap toward shore (strong enough to clear a 1-block bank).
+        this.vel.y = 5.0;
+      } else {
+        // Buoyancy: bob up to the water surface instead of sinking to the bottom,
+        // so the player can always swim back and climb out.
+        const surfaceY = world.waterSurfaceY(this.pos.x, this.pos.z) ?? this.pos.y + 1;
+        const target = surfaceY - 0.65; // feet just below the surface, head above
+        this.vel.y += (target - this.pos.y) * 10 * dt;
+        this.vel.y *= Math.max(0, 1 - dt * 5);
+        this.vel.y = clamp(this.vel.y, -3.5, 3.5);
+      }
     } else {
       this.vel.y += GRAVITY * dt;
       if (wantJump && this.onGround) this.vel.y = JUMP_VELOCITY;
     }
     this.hitWall = false;
-    this.moveWithCollision(world, dt);
+    // In water, auto-climb 1-block shore banks (see moveWithCollision).
+    this.moveWithCollision(world, dt, this.inWater ? 1.05 : 0);
 
     // Visuals.
     this.root.position.copy(this.pos);
