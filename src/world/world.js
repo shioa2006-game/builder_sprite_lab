@@ -74,6 +74,20 @@ export class VoxelWorld {
     return this.get(x, y, z) === B.WATER;
   }
 
+  // Top surface Y of the first real ground block at or below `fromY` in a column.
+  // Used for shadows so an entity under a tree casts its shadow on the ground it
+  // stands on, not on the canopy above it (groundY scans from the very top and
+  // would return the leaf ceiling because leaves are solid).
+  groundYBelow(x, z, fromY) {
+    const xi = Math.floor(x);
+    const zi = Math.floor(z);
+    for (let y = Math.min(WORLD.H - 1, Math.floor(fromY)); y >= 0; y -= 1) {
+      const id = this.get(xi, y, zi);
+      if (id !== B.AIR && BLOCK_DEFS[id]?.solid === true) return y + 1;
+    }
+    return 1;
+  }
+
   // World Y of the water surface in a column (top of the highest water cell), or
   // null if the column has no water. Used for swim buoyancy.
   waterSurfaceY(x, z) {

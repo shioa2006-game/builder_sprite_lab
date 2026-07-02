@@ -109,7 +109,7 @@ export class Player extends Entity {
       if (surf != null) submersion = Math.min(1, Math.max(0, (surf - this.pos.y) / 1.3));
     }
     this.rig.setSubmersion(submersion);
-    const gy = world.groundY(Math.floor(this.pos.x), Math.floor(this.pos.z));
+    const gy = world.groundYBelow(this.pos.x, this.pos.z, this.pos.y + 0.1);
     this.shadow.position.set(this.pos.x, gy + 0.02, this.pos.z);
     // Damage blink.
     this.rig.group.visible = this.invuln <= 0 || Math.floor(this.invuln * 14) % 2 === 0;

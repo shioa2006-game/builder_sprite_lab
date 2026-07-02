@@ -241,7 +241,7 @@ export class Villager extends Entity {
     this.rig.group.rotation.y = ctx.cameraYaw;
     this.rig.faceWorld(this.facing.x, this.facing.y, ctx.cameraYaw);
     this.rig.update(1 / 60, this.walking);
-    const gy = ctx.world.groundY(Math.floor(this.pos.x), Math.floor(this.pos.z));
+    const gy = ctx.world.groundYBelow(this.pos.x, this.pos.z, this.pos.y + 0.1);
     this.shadow.position.y = gy - this.pos.y + 0.02;
     this.rig.group.visible = this.invuln <= 0 || Math.floor(this.invuln * 14) % 2 === 0;
   }
