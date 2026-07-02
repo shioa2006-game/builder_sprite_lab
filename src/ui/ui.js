@@ -1,6 +1,10 @@
 import { ITEMS, RECIPES, itemIcon } from "../game/items.js";
 import { SFX } from "../game/sfx.js";
 
+// Injected by vite (define) — commit sha + build time. Lets us verify which
+// version a player's browser is actually running.
+export const BUILD_ID = typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "dev";
+
 function el(tag, className, parent, html) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -292,6 +296,7 @@ export class UI {
           <button class="btn-help">そうさ方法</button>
         </div>
         <div class="title-copy">勇者は、闇を払った。だが、光の中で生きる術は失われた。</div>
+        <div class="title-version">build ${BUILD_ID}</div>
       </div>`;
     this.title.querySelector(".btn-new").addEventListener("click", () => {
       this.title.classList.add("hidden");

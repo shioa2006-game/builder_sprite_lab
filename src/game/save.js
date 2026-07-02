@@ -25,7 +25,7 @@ export function writeSave(game) {
       baseLevel: game.baseLevel,
       villagers: game.villagers.map((v) => ({ id: v.id, pos: [v.pos.x, v.pos.y, v.pos.z] })),
       blueprint: game.blueprints.active
-        ? { id: game.blueprints.active.id }
+        ? { id: game.blueprints.active.id, baseY: game.blueprints.active.baseY }
         : null,
       blueprintsDone: [...game.blueprints.completed],
       edits: game.world.serializeEdits(),
