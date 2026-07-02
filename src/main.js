@@ -16,7 +16,7 @@ import { Player } from "./entities/player.js";
 import { Villager } from "./entities/villagers.js";
 import { MonsterManager } from "./entities/monsters.js";
 import { ItemDrop } from "./entities/entity.js";
-import { UI } from "./ui/ui.js";
+import { UI, BUILD_ID } from "./ui/ui.js";
 
 const CAMERA_HEIGHT = 8.2;
 const CAMERA_RADIUS = 11.5;
@@ -148,6 +148,7 @@ class Game {
 
     // Debug / automation hook.
     window.__game = this;
+    console.info(`職をつぐ者 build ${BUILD_ID}`);
   }
 
   // --- lifecycle -------------------------------------------------------------------
@@ -182,12 +183,14 @@ class Game {
       const anchors = { hut: PLACES.hut, farm: PLACES.farm, shrine: PLACES.shrine };
       const anchor = anchors[data.blueprint.id];
       const anchorOff = data.blueprint.id === "shrine" ? 2 : 1;
-      // Use the pristine ground (not the partially-built structure) so a reloaded
-      // blueprint anchors at the same height it did on first activation.
+      // Prefer the exact baseY recorded in the save; fall back to the pristine
+      // (as-generated) ground for saves written before baseY was persisted.
+      // Never derive it from current terrain — a partially built structure would
+      // raise its own blueprint.
       this.blueprints.activate(
         data.blueprint.id,
         anchor,
-        this.world.pristineSurfaceY(anchor.x + 2, anchor.z + anchorOff),
+        data.blueprint.baseY ?? this.world.pristineSurfaceY(anchor.x + 2, anchor.z + anchorOff),
       );
     }
     this.rescanWorld();

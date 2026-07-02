@@ -627,6 +627,13 @@ button:disabled {
   color: #c8d5ee;
 }
 
+.title-version {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #7e90b5;
+  letter-spacing: 1px;
+}
+
 /* --- ending ------------------------------------------------------------------------------------- */
 .overlay.ending {
   background: #05070f;

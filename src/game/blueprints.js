@@ -154,7 +154,9 @@ export class BlueprintManager {
     group.add(beam);
 
     this.scene.add(group);
-    this.active = { id, name: def.name, cells, group, beam, done: false };
+    // baseY is persisted in the save so a reload re-anchors at exactly the same
+    // height it was first activated at (never recomputed from mutable terrain).
+    this.active = { id, name: def.name, cells, group, beam, baseY, done: false };
     this.refresh();
     return this.active;
   }
