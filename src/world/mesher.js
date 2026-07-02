@@ -36,6 +36,7 @@ export class ChunkRenderer {
       opacity: 0.82,
       depthWrite: false,
       vertexColors: true, // per-vertex depth shading (deep water darker)
+      side: THREE.DoubleSide, // map-edge / drop-off water walls face outward; show both sides
     });
 
     world.onChange((x, y, z) => this.markDirtyAt(x, z));
@@ -94,14 +95,22 @@ export class ChunkRenderer {
           const id = world.get(x, y, z);
           if (id === B.AIR) continue;
           if (id === B.WATER) {
-            // Water: draw the top surface only, slightly sunk. Shade it by how
-            // much water sits below so deep sea reads as deep (the floor no longer
-            // shows through as "land"); shallow edges stay light.
-            if (world.get(x, y + 1, z) !== B.WATER) {
-              let depth = 1;
-              while (world.get(x, y - depth, z) === B.WATER) depth += 1;
-              const shade = Math.max(0.4, 1 - (depth - 1) * 0.26);
-              this.emitFace(water, x, y, z, FACES[0], "water", -0.12, shade);
+            // Water is a VOLUME, not just a top sheet: draw every face that meets
+            // open air — the surface plus the exposed walls at map edges, drop-offs
+            // and dug channels. Faces toward water or solid stay hidden. Each cell
+            // is shaded by its depth below the surface so the body reads as deep
+            // water down to the floor instead of a thin film over the sand.
+            let dTop = 1;
+            while (world.get(x, y + dTop, z) === B.WATER) dTop += 1;
+            const shade = Math.max(0.34, 1 - (dTop - 1) * 0.2);
+            for (let f = 0; f < FACES.length; f += 1) {
+              const face = FACES[f];
+              const nb = world.get(x + face.n[0], y + face.n[1], z + face.n[2]);
+              if (nb !== B.AIR) continue;
+              // Sink the surface (top face, and the top edge of the surface cell's
+              // side walls) so it sits just below the block top, matching before.
+              const sink = f === 0 || dTop === 1 ? -0.12 : 0;
+              this.emitFace(water, x, y, z, face, "water", sink, shade);
             }
             continue;
           }
