@@ -33,8 +33,9 @@ export class ChunkRenderer {
     this.waterMaterial = new THREE.MeshLambertMaterial({
       map: atlas.texture,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.82,
       depthWrite: false,
+      vertexColors: true, // per-vertex depth shading (deep water darker)
     });
 
     world.onChange((x, y, z) => this.markDirtyAt(x, z));
@@ -81,8 +82,8 @@ export class ChunkRenderer {
       }
     }
 
-    const solid = { pos: [], nor: [], uv: [], idx: [] };
-    const water = { pos: [], nor: [], uv: [], idx: [] };
+    const solid = { pos: [], nor: [], uv: [], idx: [], col: [] };
+    const water = { pos: [], nor: [], uv: [], idx: [], col: [] };
     const { world } = this;
     const x0 = cx * CHUNK;
     const z0 = cz * CHUNK;
@@ -93,9 +94,14 @@ export class ChunkRenderer {
           const id = world.get(x, y, z);
           if (id === B.AIR) continue;
           if (id === B.WATER) {
-            // Water: draw the top surface only, slightly sunk.
+            // Water: draw the top surface only, slightly sunk. Shade it by how
+            // much water sits below so deep sea reads as deep (the floor no longer
+            // shows through as "land"); shallow edges stay light.
             if (world.get(x, y + 1, z) !== B.WATER) {
-              this.emitFace(water, x, y, z, FACES[0], "water", -0.12);
+              let depth = 1;
+              while (world.get(x, y - depth, z) === B.WATER) depth += 1;
+              const shade = Math.max(0.4, 1 - (depth - 1) * 0.26);
+              this.emitFace(water, x, y, z, FACES[0], "water", -0.12, shade);
             }
             continue;
           }
@@ -126,7 +132,7 @@ export class ChunkRenderer {
     this.meshes.set(key, entry);
   }
 
-  emitFace(buf, x, y, z, face, tileName, sinkY) {
+  emitFace(buf, x, y, z, face, tileName, sinkY, shade = null) {
     const [u0, v0, u1, v1] = tileUV(tileName);
     const base = buf.pos.length / 3;
     for (let i = 0; i < 4; i += 1) {
@@ -135,6 +141,7 @@ export class ChunkRenderer {
       buf.nor.push(face.n[0], face.n[1], face.n[2]);
       const [fu, fv] = FACE_UVS[i];
       buf.uv.push(u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv);
+      if (shade != null) buf.col.push(shade, shade, shade);
     }
     buf.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
@@ -144,6 +151,9 @@ export class ChunkRenderer {
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(buf.pos, 3));
     geometry.setAttribute("normal", new THREE.Float32BufferAttribute(buf.nor, 3));
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(buf.uv, 2));
+    if (buf.col && buf.col.length) {
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(buf.col, 3));
+    }
     geometry.setIndex(buf.idx);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.matrixAutoUpdate = false;
