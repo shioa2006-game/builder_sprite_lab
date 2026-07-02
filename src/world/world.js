@@ -88,6 +88,22 @@ export class VoxelWorld {
     return 1;
   }
 
+  // Ground surface Y computed from the PRISTINE (as-generated) terrain, ignoring
+  // both foliage and anything the player has built. Blueprint base heights use this
+  // so a structure's anchor stays fixed across save/load and build progress — a
+  // partially-built structure must NOT raise its own blueprint (which drifts it up).
+  pristineSurfaceY(x, z) {
+    const src = this.pristine ?? this.data;
+    const xi = Math.floor(x);
+    const zi = Math.floor(z);
+    for (let y = WORLD.H - 1; y >= 0; y -= 1) {
+      const id = src[this.idx(xi, y, zi)];
+      if (id === B.LOG || id === B.LEAVES) continue;
+      if (id !== B.AIR && BLOCK_DEFS[id]?.solid === true) return y + 1;
+    }
+    return 1;
+  }
+
   // Top surface Y of the first real ground block at or below `fromY` in a column.
   // Used for shadows so an entity under a tree casts its shadow on the ground it
   // stands on, not on the canopy above it (groundY scans from the very top and

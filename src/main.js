@@ -182,10 +182,12 @@ class Game {
       const anchors = { hut: PLACES.hut, farm: PLACES.farm, shrine: PLACES.shrine };
       const anchor = anchors[data.blueprint.id];
       const anchorOff = data.blueprint.id === "shrine" ? 2 : 1;
+      // Use the pristine ground (not the partially-built structure) so a reloaded
+      // blueprint anchors at the same height it did on first activation.
       this.blueprints.activate(
         data.blueprint.id,
         anchor,
-        this.world.terrainSurfaceY(anchor.x + 2, anchor.z + anchorOff),
+        this.world.pristineSurfaceY(anchor.x + 2, anchor.z + anchorOff),
       );
     }
     this.rescanWorld();
