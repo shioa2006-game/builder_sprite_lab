@@ -171,6 +171,8 @@ export function createToolMesh(kind) {
 
 // --- humanoid rig ---------------------------------------------------------------
 
+const tmpColor = new THREE.Color();
+const UNDERWATER_COLOR = new THREE.Color(0x2a6fb0);
 const tmpMount = new THREE.Vector3();
 const tmpSwingAxis = new THREE.Vector3();
 const tmpHandleDir = new THREE.Vector3();
@@ -208,7 +210,32 @@ export class HumanoidRig {
     this.walkTime = 0;
     this.animTime = Math.random() * 10;
     this.attackT = 0; // 0 = idle, counts down from 1 while swinging
+
+    // Collect this rig's own tintable materials (sprite fronts + limbs) with their
+    // base colors, so we can shift them toward an underwater blue when submerged.
+    this._tint = [];
+    this.inner.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) {
+        if (m === outlineMaterial || m === hiddenFaceMaterial || !m.color) continue;
+        this._tint.push({ m, base: m.color.clone() });
+      }
+    });
+    this._submersion = 0;
+
     this.setDirection("front");
+  }
+
+  // frac 0 = dry, 1 = fully underwater. Shifts the character toward a dim blue so a
+  // submerged hero reads as being IN the water (not floating on the surface).
+  setSubmersion(frac) {
+    frac = Math.max(0, Math.min(1, frac));
+    if (Math.abs(frac - this._submersion) < 0.01) return;
+    this._submersion = frac;
+    for (const t of this._tint) {
+      t.m.color.copy(t.base).lerp(UNDERWATER_COLOR, frac * 0.62).multiplyScalar(1 - frac * 0.22);
+    }
   }
 
   createHead() {

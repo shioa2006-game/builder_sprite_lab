@@ -102,6 +102,13 @@ export class Player extends Entity {
     this.rig.group.rotation.y = cameraYaw;
     this.rig.faceWorld(this.facing.x, this.facing.y, cameraYaw);
     this.rig.update(dt, this.walking);
+    // Underwater tint: 0 at the surface, ramping to full ~1.3 blocks under.
+    let submersion = 0;
+    if (this.inWater) {
+      const surf = world.waterSurfaceY(this.pos.x, this.pos.z);
+      if (surf != null) submersion = Math.min(1, Math.max(0, (surf - this.pos.y) / 1.3));
+    }
+    this.rig.setSubmersion(submersion);
     const gy = world.groundY(Math.floor(this.pos.x), Math.floor(this.pos.z));
     this.shadow.position.set(this.pos.x, gy + 0.02, this.pos.z);
     // Damage blink.
