@@ -172,7 +172,7 @@ export class Monster extends Entity {
     this.sprite.faceWorld(this.facingDir.x, this.facingDir.y, ctx.cameraYaw);
     this.sprite.mesh.rotation.y = ctx.cameraYaw;
     this.sprite.update(dt);
-    const gy = ctx.world.groundY(Math.floor(this.pos.x), Math.floor(this.pos.z));
+    const gy = ctx.world.groundYBelow(this.pos.x, this.pos.z, this.pos.y + 0.1);
     this.shadow.position.y = gy - this.pos.y + 0.02;
     this.hpBar.visible = this.hp < this.maxHp;
     this.hpBarFg.scale.x = 0.68 * this.def.scale * Math.max(0, this.hp / this.maxHp);
