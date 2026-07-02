@@ -1,891 +1,919 @@
 import * as THREE from "three";
+import { Input } from "./core/input.js";
+import { cellKey } from "./core/utils.js";
+import { B, BLOCK_DEFS } from "./world/blocks.js";
+import { VoxelWorld, WORLD, PLACES } from "./world/world.js";
+import { ChunkRenderer } from "./world/mesher.js";
+import { PropRenderer } from "./world/props.js";
+import { ITEMS, Inventory } from "./game/items.js";
+import { QuestManager, stageIndex } from "./game/quests.js";
+import { DayNight } from "./game/daynight.js";
+import { BlueprintManager } from "./game/blueprints.js";
+import { DefenseEvent } from "./game/defense.js";
+import { SFX } from "./game/sfx.js";
+import { hasSave, writeSave, readSave } from "./game/save.js";
+import { Player } from "./entities/player.js";
+import { Villager } from "./entities/villagers.js";
+import { MonsterManager } from "./entities/monsters.js";
+import { ItemDrop } from "./entities/entity.js";
+import { UI } from "./ui/ui.js";
 
-const MAP_SIZE = 16;
-const TILE_SIZE = 1;
-const MOVE_DURATION = 0.22;
-const WALK_ANIM_SPEED = 11;
+const CAMERA_HEIGHT = 8.2;
+const CAMERA_RADIUS = 11.5;
 const CAMERA_ROTATE_STEP = Math.PI / 4;
-
-// --- 2.5D deformed character layout ------------------------------------------
-// All parts live in playerBillboard local space. y = 0 sits CHAR_CLEARANCE above
-// the terrain top, and the boots are built to reach back down to the ground.
-const CHAR_CLEARANCE = 0.04; // boots-to-ground gap so feet read as planted
-const HIP_Y = 0.12; // hip / leg-attach height; legs are short stubs down to the ground
-const BODY_W = 0.5;
-const BODY_H = 0.4;
-const BODY_D = 0.08;
-const BODY_CY = HIP_Y + BODY_H / 2;
-const SHOULDER_Y = HIP_Y + BODY_H - 0.06;
-const HEAD_W = 0.6;
-const HEAD_H = 0.5;
-const HEAD_D = 0.07;
-const HEAD_CY = HIP_Y + BODY_H + HEAD_H / 2 - 0.08; // slight overlap with the body box
-const ARM_X = BODY_W / 2 - 0.03; // shoulder pivot tucked inside the torso edge
-
-// Camera is a fixed quarter view, so the character faces a fixed yaw toward it
-// (instead of full billboarding). That keeps the thin boxes from looking like
-// flat paper: we see their front + a sliver of side/top.
-const CAMERA_HEIGHT = 7.0;
-const CAMERA_RADIUS = Math.hypot(6.5, 8.0);
-const INITIAL_CAMERA_YAW = Math.atan2(6.5, 8.0);
-// Camera follow as a time-based exponential decay (per second) instead of a fixed
-// per-frame lerp factor, so the smoothing is frame-rate independent. ~7.7 matches
-// the previous feel of `lerp(..., 0.12)` at 60fps: 1 - exp(-7.7/60) ≈ 0.12.
 const CAMERA_FOLLOW_RATE = 7.7;
-const swingAxis = new THREE.Vector3(); // reused: per-direction limb swing axis
-const hammerMountWorld = new THREE.Vector3(); // reused: right-hand grip world position
-const HAMMER_HEAD_UP = new THREE.Vector3(0, 1, 0); // cylinder geometry's local axis
-const hammerHeadAxis = new THREE.Vector3(); // reused: target cylinder-axis direction
-const hammerHandleDir = new THREE.Vector3(); // reused: handle direction (char frame)
-const hammerStrikeDir = new THREE.Vector3(); // reused: desired strike (travel + down)
-const hammerHeadQuat = new THREE.Quaternion(); // reused: desired head orientation
+const REACH = 5.6;
 
-// Front-face texture windows. The sprite art is NOT centered in each cell and its
-// horizontal center shifts per direction, so the center (cx, measured from the
-// sprite's alpha) is stored per direction and the window is centered on it; a
-// fixed window would push the head/body off to one side. The head band runs from
-// the neck to the exact cap top so the box top aligns with the hat; the body band
-// runs from the shoulders down to the hips (the sheet has no arms, so the full
-// torso width can be shown).
-const HEAD_HALF_U = 0.34; // half-width of the head window (cell fraction)
-const BODY_HALF_U = 0.25; // half-width of the torso window
-// v measured from the cell BOTTOM. New art: cap top ~0.955, neck ~0.41, art bottom
-// ~0.055. Head band = neck..cap; body band = art bottom..shoulders (they overlap a
-// little at the neck so the boxes read as continuous).
-const HEAD_V = { v0: 0.4, v1: 0.955 };
-const BODY_V = { v0: 0.05, v1: 0.45 };
-// The bust art is centered in every cell (hCenter ~0.49-0.50), so the windows use a
-// near-uniform center instead of the old per-direction offsets.
-const ART_CENTERS = {
-  front: { h: 0.492, b: 0.492 },
-  front_right: { h: 0.496, b: 0.496 },
-  right: { h: 0.492, b: 0.492 },
-  back_right: { h: 0.496, b: 0.496 },
-  back: { h: 0.492, b: 0.492 },
-  back_left: { h: 0.492, b: 0.492 },
-  left: { h: 0.496, b: 0.496 },
-  front_left: { h: 0.5, b: 0.5 },
-};
+class Game {
+  constructor() {
+    // --- renderer / scene ---------------------------------------------------------
+    this.app = document.querySelector("#app");
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x8fb5c9);
+    this.scene.fog = new THREE.Fog(0x8fb5c9, 30, 55);
+    this.camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 200);
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.app.appendChild(this.renderer.domElement);
+    window.addEventListener("resize", () => {
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    });
 
-// Facing vector per direction in billboard-local ground plane (x = screen right,
-// z = toward viewer). Drives 8-direction arm/leg placement.
-const FACING = {
-  front: [0, 1],
-  front_right: [0.707, 0.707],
-  right: [1, 0],
-  back_right: [0.707, -0.707],
-  back: [0, -1],
-  back_left: [-0.707, -0.707],
-  left: [-1, 0],
-  front_left: [-0.707, 0.707],
-};
-const LEG_SEP = 0.07; // narrow: legs tuck partly into the torso bottom
-const ARM_SEP = 0.14;
-const LEG_LIFT = 0.08; // raise leg attach so the tops embed into the body
-const ARM_REST_TILT = 0.34; // rad (~19deg): arms angle outward from the shoulder
-const LIMB_DEPTH_SCALE = 0.42; // compress front-back separation (the character is thin)
-const HAMMER_HANDLE_LENGTH = 0.36;
-const HAMMER_HEAD_RADIUS = 0.075;
-const HAMMER_HEAD_H = 0.25;
-const HAMMER_GRIP_Y = -0.265;
-const HAMMER_MOUNT_Z = {
-  front: 0.035,
-  front_right: 0.035,
-  right: 0.04,
-  back_right: -0.035,
-  back: -0.045,
-  back_left: -0.055,
-  left: 0.04,
-  front_left: -0.04,
-};
-// The hammer mesh is built along local -X, so each angle points that -X axis in
-// the character's 8-way facing direction on screen.
-const HAMMER_DIRECTION_ANGLE = {
-  front: -Math.PI / 2,
-  front_right: (-Math.PI * 3) / 4,
-  right: Math.PI,
-  back_right: (-Math.PI * 3) / 4,
-  back: -Math.PI / 2,
-  back_left: 0,
-  left: 0,
-  front_left: -Math.PI / 4,
-};
-// Cylinder-head facing. A hammer strikes the ground in the travel direction with
-// its round cap, and the head crosses the shaft (the shaft never pierces the cap),
-// so the cylinder axis must (a) stay PERPENDICULAR to the handle and (b) point as
-// close as possible to "down + along the travel direction". We build that strike
-// target, then project it onto the plane perpendicular to the handle to get the
-// axis. Because the travel direction comes from FACING, front_X and back_X are
-// distinguished even when they share a handle angle (e.g. front_right vs back_right
-// both use a -3PI/4 handle, but the cap leans toward vs away from the camera).
-// STRIKE_LEAN weights the travel component against the downward (ground) one.
-const HAMMER_HEAD_STRIKE_LEAN = 1.0;
+    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0x63724f, 2.4);
+    this.sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    this.sunLight.position.set(20, 30, 14);
+    this.scene.add(this.hemiLight, this.sunLight);
 
-// Palette pulled from the sprite so the 3D parts / box sides don't clash.
-const COLORS = {
-  capBlue: 0x2f5db0, // sampled from the new bust: beret blue
-  capBlueDark: 0x203f74,
-  jacketBlue: 0x2856a8, // armor/shoulder blue (3D sleeves continue from the shoulders)
-  jacketBlueDark: 0x1c3f78,
-  glove: 0x7b4a22,
-  hammerGrip: 0xaa0000,
-  steel: 0xaeb6bb,
-  steelDark: 0x687176,
-  pants: 0xc9b78e,
-  boot: 0x6b3f1d,
-  back: 0x24467e, // dark blue behind the torso
-  outline: 0x14110f,
-};
+    // --- world ---------------------------------------------------------------------
+    this.world = new VoxelWorld();
+    this.world.generate();
+    this.input = new Input(this.renderer.domElement);
+    this.ui = new UI();
+    this.inventory = new Inventory();
+    this.daynight = new DayNight();
+    this.baseLevel = 0;
 
-// Bust sheet (head + shoulders/chest, no arms, no legs). Already transparent
-// (RGBA), so no chroma-key step: referenced directly. 4x2 grid, 128px cells,
-// art centered in each cell.
-const bodySheetUrl = new URL("../assets/adventurer_boy_body_8dir.png", import.meta.url).href;
+    // Runtime cell indexes (workbenches, farmland, growing crops).
+    this.workbenches = new Set();
+    this.farmland = new Set();
+    this.cropGrowth = new Map();
+    this.world.onChange((x, y, z, id, prev) => this.onWorldChange(x, y, z, id, prev));
 
-// The bust sheet uses the same cell layout as the original sheet. Row 0 turns
-// left: front, front_left, left, back_left. Row 1 turns right: back, back_right,
-// right, front_right. (front/back sit in column 0.)
-// Canonical cell<->key<->direction table is in README (§スプライトのセル対応).
-// Quick reference (cell# = left-to-right, top-to-bottom):
-//   1 S/↓ front    2 A+S/↙ front_left  3 A/← left     4 A+W/↖ back_left
-//   5 W/↑ back     6 D+W/↗ back_right  7 D/→ right     8 D+S/↘ front_right
-const DIRECTIONS = {
-  front: { col: 0, row: 0 },
-  front_left: { col: 1, row: 0 },
-  left: { col: 2, row: 0 },
-  back_left: { col: 3, row: 0 },
-  back: { col: 0, row: 1 },
-  back_right: { col: 1, row: 1 },
-  right: { col: 2, row: 1 },
-  front_right: { col: 3, row: 1 },
-};
+    this.chunks = new ChunkRenderer(this.world, this.scene);
+    this.props = new PropRenderer(this.world, this.scene);
+    this.blueprints = new BlueprintManager(this.world, this.scene);
+    this.blueprints.onComplete = (id) => {
+      SFX.quest();
+      this.ui.toast("✅ 設計図が完成した！");
+      this.quests.onBlueprintComplete(id);
+    };
 
-const INPUT_TO_DIRECTION = new Map([
-  ["0,1", "front"],
-  ["1,1", "front_right"],
-  ["1,0", "right"],
-  ["1,-1", "back_right"],
-  ["0,-1", "back"],
-  ["-1,-1", "back_left"],
-  ["-1,0", "left"],
-  ["-1,1", "front_left"],
-]);
+    // --- entities --------------------------------------------------------------------
+    this.player = new Player(this.scene);
+    const sp = PLACES.spawn;
+    this.player.pos.set(sp.x + 0.5, this.world.groundY(sp.x, sp.z) + 0.1, sp.z + 0.5);
+    this.villagers = [];
+    this.monsters = new MonsterManager(this.scene);
+    this.drops = [];
+    this.defense = new DefenseEvent(this.monsters, this.world);
+    this.defense.onEnd = (win) => {
+      for (const v of this.villagers) {
+        v.setDown(false);
+        v.hp = v.maxHp;
+        v.rig.setTool(null);
+      }
+      this.quests.onRaidEnd(win);
+      if (win) this.autosave();
+    };
+    this.bannerEntity = { pos: new THREE.Vector3(), halfW: 0.55, dead: false, isBanner: true };
 
-const terrainHeights = [
-  [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0],
-  [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 0, 0],
-  [0, 1, 1, 1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 0],
-  [0, 1, 1, 1, 2, 2, 2, 2, 1, 1, 2, 3, 2, 1, 1, 0],
-  [1, 1, 1, 2, 2, 3, 3, 2, 2, 1, 2, 3, 2, 2, 1, 1],
-  [1, 1, 2, 2, 3, 3, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1],
-  [1, 1, 2, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1],
-  [1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 1, 1, 1, 1, 1, 1],
-  [1, 1, 1, 1, 2, 1, 1, 2, 2, 3, 2, 1, 1, 1, 1, 1],
-  [1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 2, 2, 1, 1, 1, 1],
-  [1, 1, 1, 1, 1, 2, 2, 3, 3, 2, 2, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0],
-  [0, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 1, 1, 0, 0],
-  [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
-  [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0],
-  [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
-];
+    // --- camera / aim -----------------------------------------------------------------
+    this.cameraYaw = Math.atan2(6.5, 8.0);
+    this.cameraYawTarget = this.cameraYaw;
+    this.camZoom = 1; // occlusion auto-zoom (1 = full orbit radius)
+    this.raycaster = new THREE.Raycaster();
+    this.highlight = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02)),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 }),
+    );
+    this.highlight.visible = false;
+    this.scene.add(this.highlight);
+    this.aim = null; // {cell:{x,y,z}, place:{x,y,z}, id}
+    this.breakTarget = null;
+    this.breakProgress = 0;
+    this.swingTick = 0;
 
-const debugGrid = document.querySelector("#debug-grid");
-const debugDirection = document.querySelector("#debug-direction");
-const debugState = document.querySelector("#debug-state");
-const hammerToggle = document.querySelector("#hammer-toggle");
+    // --- quests / UI hooks --------------------------------------------------------------
+    this.quests = new QuestManager(this);
+    this.inventory.onChange(() => {
+      this.ui.setHotbar(this.inventory);
+      this.player.updateEquipmentBonuses(this.inventory);
+    });
+    this.ui.hooks = {
+      selectHotbar: (i) => {
+        this.inventory.selected = i;
+        this.ui.setHotbar(this.inventory);
+      },
+      craft: (recipe) => {
+        if (!this.inventory.craft(recipe)) return false;
+        this.quests.onCrafted(recipe.out);
+        this.ui.toast(`✨ ${ITEMS[recipe.out].name} を作った！`);
+        return true;
+      },
+      swapSlots: (a, b) => {
+        const t = this.inventory.slots[a];
+        this.inventory.slots[a] = this.inventory.slots[b];
+        this.inventory.slots[b] = t;
+        this.inventory.emit();
+      },
+    };
 
-const app = document.querySelector("#app");
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fb5c9);
-scene.fog = new THREE.Fog(0x8fb5c9, 16, 28);
+    this.toastCooldowns = new Map();
+    this.autosaveTimer = 30;
+    this.started = false;
+    this.clock = new THREE.Clock();
 
-const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 100);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-app.appendChild(renderer.domElement);
+    // Title screen over the live scene.
+    this.ui.showTitle({
+      hasSave: hasSave(),
+      onNew: () => this.startNewGame(),
+      onContinue: () => this.loadGame(),
+    });
 
-const ambientLight = new THREE.HemisphereLight(0xffffff, 0x63724f, 2.4);
-scene.add(ambientLight);
+    this.renderer.setAnimationLoop(() => this.frame(Math.min(0.05, this.clock.getDelta())));
 
-const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
-sunLight.position.set(5, 8, 4);
-scene.add(sunLight);
+    // Debug / automation hook.
+    window.__game = this;
+  }
 
-const blockGeometry = new THREE.BoxGeometry(TILE_SIZE, TILE_SIZE, TILE_SIZE);
-const materials = {
-  grass: new THREE.MeshLambertMaterial({ color: 0x66a944 }),
-  dirt: new THREE.MeshLambertMaterial({ color: 0x8b5f35 }),
-  stone: new THREE.MeshLambertMaterial({ color: 0x7b8489 }),
-};
+  // --- lifecycle -------------------------------------------------------------------
 
-const terrainGroup = new THREE.Group();
-scene.add(terrainGroup);
+  startNewGame() {
+    this.inventory.add("hammer_wood", 1);
+    this.inventory.add("herb", 2);
+    this.started = true;
+    this.ui.setHp(this.player.hp, this.player.maxHp);
+    this.ui.fade(false, 900);
+    this.quests.startIntro();
+  }
 
-for (let z = 0; z < MAP_SIZE; z += 1) {
-  for (let x = 0; x < MAP_SIZE; x += 1) {
-    const height = getHeight(x, z);
-    for (let y = 0; y < height; y += 1) {
-      const isTop = y === height - 1;
-      const material = height >= 3 && isTop ? materials.stone : isTop ? materials.grass : materials.dirt;
-      const block = new THREE.Mesh(blockGeometry, material);
-      block.position.set(gridToWorld(x), y + 0.5, gridToWorld(z));
-      terrainGroup.add(block);
+  loadGame() {
+    const data = readSave();
+    if (!data) return this.startNewGame();
+    this.world.applyEdits(data.edits ?? []);
+    this.chunks.buildAll();
+    this.props.rebuildAll();
+    this.inventory.load(data.inventory);
+    this.quests.load(data.stage);
+    this.daynight.hour = data.time?.hour ?? 8;
+    this.daynight.day = data.time?.day ?? 1;
+    this.setBaseLevel(data.baseLevel ?? 0);
+    this.player.pos.set(...data.player.pos);
+    this.player.hp = data.player.hp;
+    for (const v of data.villagers ?? []) {
+      this.spawnVillager(v.id, v.pos[0], v.pos[2], v.pos[1]);
+    }
+    for (const done of data.blueprintsDone ?? []) this.blueprints.completed.add(done);
+    if (data.blueprint) {
+      const anchors = { hut: PLACES.hut, farm: PLACES.farm, shrine: PLACES.shrine };
+      const anchor = anchors[data.blueprint.id];
+      this.blueprints.activate(
+        data.blueprint.id,
+        anchor,
+        this.world.groundY(anchor.x + 2, anchor.z + 1) - (data.blueprint.id === "farm" ? 0 : 0),
+      );
+    }
+    this.rescanWorld();
+    // Restore stage-dependent markers.
+    if (this.quests.stage === "MEET_MINA") this.villager("mina")?.marker && (this.villager("mina").marker.visible = true);
+    if (this.quests.stage === "PREPARE") this.villager("gonta")?.marker && (this.villager("gonta").marker.visible = true);
+    if (this.quests.stage === "DEFENSE") this.quests.setStage("PREPARE", true);
+    this.started = true;
+    this.ui.setHp(this.player.hp, this.player.maxHp);
+    this.ui.setHotbar(this.inventory);
+    this.ui.fade(false, 900);
+    this.ui.toast("💾 つづきから はじめます");
+  }
+
+  rescanWorld() {
+    this.workbenches.clear();
+    this.farmland.clear();
+    this.cropGrowth.clear();
+    for (let z = 0; z < WORLD.D; z += 1) {
+      for (let x = 0; x < WORLD.W; x += 1) {
+        for (let y = 0; y < WORLD.H; y += 1) {
+          const id = this.world.get(x, y, z);
+          if (id === B.WORKBENCH) this.workbenches.add(cellKey(x, y, z));
+          if (id === B.FARMLAND) this.farmland.add(cellKey(x, y, z));
+          if (id === B.CROP1 || id === B.CROP2) this.cropGrowth.set(cellKey(x, y, z), 0);
+          if (id === B.BANNER) this.bannerEntity.pos.set(x + 0.5, y, z + 0.5);
+        }
+      }
     }
   }
-}
 
-// Two independent samplers of the same sheet: one windowed to the head, one to
-// the torso. Cloning keeps the image shared but gives each its own UV transform.
-const textureLoader = new THREE.TextureLoader();
-const headTexture = loadPixelTexture(bodySheetUrl);
-const bodyTexture = headTexture.clone();
-bodyTexture.needsUpdate = true;
-
-const outlineMaterial = new THREE.MeshBasicMaterial({ color: COLORS.outline, side: THREE.BackSide });
-// Top/bottom faces of the textured boxes are hidden: the sprite art is rounded, so
-// a full-width horizontal cap face pokes out above it as a stray bar. Thickness
-// comes from the vertical side faces, which is what reads at this quarter angle.
-const hiddenFaceMaterial = new THREE.MeshBasicMaterial({ visible: false });
-
-const playerRoot = new THREE.Group();
-scene.add(playerRoot);
-
-const playerBillboard = new THREE.Group();
-playerRoot.add(playerBillboard);
-
-const character = createHybridPlayer();
-playerBillboard.add(character.group);
-
-const shadowMaterial = new THREE.MeshBasicMaterial({
-  color: 0x000000,
-  transparent: true,
-  opacity: 0.22,
-  depthWrite: false,
-});
-const playerShadow = new THREE.Mesh(new THREE.CircleGeometry(0.32, 32), shadowMaterial);
-playerShadow.rotation.x = -Math.PI / 2;
-playerShadow.scale.set(1.25, 1, 0.82); // horizontal ellipse
-scene.add(playerShadow);
-
-const keys = new Set();
-const equipment = {
-  hammer: true,
-};
-const player = {
-  grid: { x: 4, z: 8 },
-  direction: "front",
-  state: "idle",
-  moving: false,
-  moveStart: new THREE.Vector3(),
-  moveEnd: new THREE.Vector3(),
-  moveElapsed: 0,
-  // Normalized segment-progress velocities (0 = start/stop at rest, 1 = cruise) at
-  // the two ends of the current tile segment. They let consecutive tiles join with
-  // matching velocity so continuous walking cruises at constant speed instead of
-  // re-easing (stop-start) at every grid boundary.
-  segEntryVel: 0,
-  segExitVel: 0,
-  walkTime: 0,
-  animTime: 0,
-};
-const cameraOrbit = {
-  yaw: INITIAL_CAMERA_YAW,
-};
-
-setHybridDirection(player.direction);
-updateHammerVisibility();
-snapPlayerToGrid();
-updateCamera(true);
-updateCharacterFacing();
-updatePlayerAnimation();
-updateDebug();
-
-hammerToggle?.addEventListener("change", () => {
-  equipment.hammer = hammerToggle.checked;
-  updateHammerVisibility();
-});
-
-// --- debug hook (screenshot-driven hammer tuning) ----------------------------
-window.__hammerDebug = {
-  setDir(direction) {
-    player.direction = direction;
-    setHybridDirection(direction);
-    updateHammerAttachment();
-  },
-  get angle() {
-    return { dir: HAMMER_DIRECTION_ANGLE, lean: HAMMER_HEAD_STRIKE_LEAN };
-  },
-};
-
-window.addEventListener("keydown", (event) => {
-  const cameraRotateDirection = getCameraRotateDirection(event);
-  if (isMovementKey(event.key)) {
-    event.preventDefault();
-    keys.add(normalizeKey(event.key));
-  } else if (cameraRotateDirection !== 0) {
-    event.preventDefault();
-    rotateCamera(cameraRotateDirection);
-  }
-});
-
-window.addEventListener("keyup", (event) => {
-  if (isMovementKey(event.key)) {
-    event.preventDefault();
-    keys.delete(normalizeKey(event.key));
-  }
-});
-
-renderer.domElement.addEventListener("contextmenu", (event) => {
-  event.preventDefault();
-});
-
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-const clock = new THREE.Clock();
-
-function frame(delta) {
-  if (player.moving) {
-    updateMovement(delta);
-  } else {
-    tryStartMove();
+  onWorldChange(x, y, z, id, prev) {
+    const key = cellKey(x, y, z);
+    if (id === B.WORKBENCH) this.workbenches.add(key);
+    else if (prev === B.WORKBENCH) this.workbenches.delete(key);
+    if (id === B.FARMLAND) this.farmland.add(key);
+    else if (prev === B.FARMLAND) this.farmland.delete(key);
+    if (id === B.CROP1 || id === B.CROP2) {
+      if (!this.cropGrowth.has(key)) this.cropGrowth.set(key, 0);
+    } else {
+      this.cropGrowth.delete(key);
+    }
+    if (id === B.BANNER) this.bannerEntity.pos.set(x + 0.5, y, z + 0.5);
   }
 
-  player.walkTime += player.state === "walking" ? delta : -player.walkTime;
-  player.animTime += delta;
-  updatePlayerAnimation();
-  updateCamera(false, delta);
-  updateCharacterFacing();
-  updateDebug();
-  renderer.render(scene, camera);
-}
+  autosave() {
+    if (!this.started || this.quests.stage === "INTRO" || this.defense.active) return;
+    writeSave(this);
+  }
 
-renderer.setAnimationLoop(() => frame(clock.getDelta()));
+  // --- quest facade ------------------------------------------------------------------
 
-// Debug: pause/resume the render loop so headless screenshots don't wait forever
-// for an idle frame. Renders a single frame on demand while paused.
-window.__hammerDebug.pause = () => renderer.setAnimationLoop(null);
-window.__hammerDebug.resume = () => renderer.setAnimationLoop(() => frame(clock.getDelta()));
-window.__hammerDebug.renderOnce = () => renderer.render(scene, camera);
-// Close-up screenshot helper: pause loop, place camera near the character along the
-// current orbit yaw, aim at the torso, render one frame.
-window.__hammerDebug.zoom = (radius = 2.4, height = 1.6) => {
-  renderer.setAnimationLoop(null);
-  const target = playerRoot.position.clone();
-  target.y += 0.45;
-  camera.position.set(
-    target.x + Math.sin(cameraOrbit.yaw) * radius,
-    target.y + height,
-    target.z + Math.cos(cameraOrbit.yaw) * radius,
-  );
-  camera.lookAt(target);
-  renderer.render(scene, camera);
-};
+  onStageChanged() {
+    this.autosaveTimer = Math.min(this.autosaveTimer, 2);
+  }
 
-function loadPixelTexture(url) {
-  const texture = textureLoader.load(url);
-  // The bust art is high-detail with anti-aliased outlines, so sample it smoothly.
-  // No mipmaps: on this atlas a mipmapped minFilter would blend neighbouring cells.
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearFilter;
-  texture.generateMipmaps = false;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
+  spawnVillager(id, x, z, y = null) {
+    if (this.villager(id)) return this.villager(id);
+    const gy = y ?? this.world.groundY(Math.floor(x), Math.floor(z)) + 0.1;
+    const v = new Villager(id, x + 0.001, gy, z + 0.001);
+    this.villagers.push(v);
+    this.scene.add(v.root);
+    return v;
+  }
 
-// --- character assembly -------------------------------------------------------
+  villager(id) {
+    return this.villagers.find((v) => v.id === id) ?? null;
+  }
 
-function createHybridPlayer() {
-  const group = new THREE.Group();
-  const head = createHeadPart();
-  const body = createBodyPart();
-  const leftArm = createArmPart(-1);
-  const rightArm = createArmPart(1);
-  const leftLeg = createLegPart(-1);
-  const rightLeg = createLegPart(1);
-  const hammer = createHammerPart();
-  group.add(hammer, head.group, body.group, leftArm, rightArm, leftLeg, rightLeg);
-  return { group, head, body, leftArm, rightArm, leftLeg, rightLeg, hammer };
-}
+  placeBanner() {
+    const { x, z } = PLACES.banner;
+    const y = this.world.groundY(x, z);
+    this.world.set(x, y, z, B.BANNER);
+  }
 
-// Box ordered: +X, -X, +Y, -Y, +Z(front), -Z(back). The front face carries the
-// windowed sprite texture; the other faces are flat color so the part reads as a
-// thin solid instead of a single plane.
-function makeFaceBox(geometry, frontTexture, sideColor, backColor) {
-  const frontMat = new THREE.MeshBasicMaterial({
-    map: frontTexture,
-    transparent: true,
-    alphaTest: 0.2,
-  });
-  const sideMat = new THREE.MeshToonMaterial({ color: sideColor });
-  const backMat = new THREE.MeshToonMaterial({ color: backColor });
-  // order: +X, -X, +Y(hidden), -Y(hidden), +Z(front), -Z(back)
-  const box = new THREE.Mesh(geometry, [sideMat, sideMat, hiddenFaceMaterial, hiddenFaceMaterial, frontMat, backMat]);
-  return box;
-}
+  giveItems(list) {
+    for (const [id, n] of list) this.inventory.add(id, n);
+  }
 
-function createHeadPart() {
-  const group = new THREE.Group();
-  group.position.y = HEAD_CY;
-  const box = makeFaceBox(
-    new THREE.BoxGeometry(HEAD_W, HEAD_H, HEAD_D),
-    headTexture,
-    COLORS.capBlue, // sides = cap blue
-    COLORS.capBlueDark, // back
-  );
-  // Hide the head box's side faces. HEAD_W is wider than the (narrow, off-center)
-  // profile art, so on side views the solid cap-blue side strip pokes out past the
-  // head silhouette as a thin line. The body box below still supplies the 2.5D depth.
-  box.material[0] = hiddenFaceMaterial; // +X
-  box.material[1] = hiddenFaceMaterial; // -X
-  box.renderOrder = 14;
-  group.add(box);
-  // No back-side outline shell on the textured boxes: the sprite art already has
-  // a baked black contour, and a shell would show through the front's transparent
-  // margins as a black rectangle. Box thickness comes from the solid side faces.
-  return { group, box };
-}
+  setBaseLevel(level) {
+    this.baseLevel = level;
+    this.ui.setBaseLevel(level);
+  }
 
-function createBodyPart() {
-  const group = new THREE.Group();
-  group.position.y = BODY_CY;
-  const box = makeFaceBox(
-    new THREE.BoxGeometry(BODY_W, BODY_H, BODY_D),
-    bodyTexture,
-    COLORS.jacketBlue, // sides
-    COLORS.back, // back
-  );
-  // Same as the head: hide the side faces so the solid jacket-blue thickness strip
-  // doesn't poke out behind the torso on side views. Depth comes from the 3D limbs.
-  box.material[0] = hiddenFaceMaterial; // +X
-  box.material[1] = hiddenFaceMaterial; // -X
-  box.renderOrder = 12;
-  group.add(box);
-  return { group, box };
-}
+  startDefense() {
+    this.daynight.forceNight();
+    this.defense.start();
+    this.ui.toast("⚠️ 魔物の大群が 拠点にせまっている！");
+  }
 
-function createArmPart(side) {
-  const pivot = new THREE.Group();
-  pivot.position.set(side * ARM_X, SHOULDER_Y, 0);
-  // Inner group: rest the arm angled outward from the shoulder (not parallel to
-  // the torso). Swing happens on `pivot`, so this tilt stays independent of it.
-  const limb = new THREE.Group();
-  limb.rotation.z = side * ARM_REST_TILT; // splay the hand outward; sign refreshed per direction in setLimbLayout
-  const sleeveMat = new THREE.MeshToonMaterial({ color: COLORS.jacketBlue });
-  const gloveMat = new THREE.MeshToonMaterial({ color: COLORS.glove });
-  const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.056, 0.1, 4, 8), sleeveMat); // ~2/3 width
-  upper.position.y = -0.12;
-  const glove = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), gloveMat); // ~2/3 width
-  glove.position.y = -0.26;
-  const hammerMount = new THREE.Group();
-  limb.add(upper, glove);
-  pivot.add(limb);
-  pivot.add(hammerMount);
-  pivot.userData.tiltGroup = limb; // so setLimbLayout can re-aim the splay per direction
-  pivot.userData.hammerMount = hammerMount;
-  addOutline(upper, 1.14);
-  addOutline(glove, 1.1);
-  return pivot;
-}
+  // --- combat helpers ---------------------------------------------------------------
 
-function createLegPart(side) {
-  const pivot = new THREE.Group();
-  pivot.position.set(side * 0.12, HIP_Y, 0);
-  const pantsMat = new THREE.MeshToonMaterial({ color: COLORS.pants });
-  const bootMat = new THREE.MeshToonMaterial({ color: COLORS.boot });
-  const legRadius = 0.05; // ~2/3 width
-  const reach = HIP_Y + LEG_LIFT + CHAR_CLEARANCE; // lifted hip pivot -> ground
-  const bootH = 0.05;
-  const thighLen = Math.max(0.05, reach - bootH - legRadius * 2);
-  const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(legRadius, thighLen, 4, 8), pantsMat);
-  thigh.position.y = -(reach - bootH) / 2;
-  const boot = new THREE.Mesh(new THREE.BoxGeometry(0.12, bootH, 0.16), bootMat);
-  boot.position.set(0, -reach + bootH / 2, 0.03);
-  pivot.add(thigh, boot);
-  addOutline(thigh, 1.1);
-  addOutline(boot, 1.08, 0.008); // constant-width border so the short boot keeps a clear outline
-  return pivot;
-}
+  hurtMonster(m, dmg, fromPos) {
+    if (m.dead) return;
+    if (!m.takeDamage(dmg, fromPos, m.def.boss ? 1.2 : 6)) return;
+    m.onHit();
+    SFX.hitMonster();
+    if (m.hp <= 0) {
+      m.dead = true;
+      m.deathT = 0;
+      SFX.kill();
+      for (const [item, min, max] of m.def.drops) {
+        const n = min + Math.floor(Math.random() * (max - min + 1));
+        for (let i = 0; i < n; i += 1) {
+          this.spawnDrop(item, 1, m.pos.x, m.pos.y + 0.4, m.pos.z);
+        }
+      }
+    }
+  }
 
-function createHammerPart() {
-  const group = new THREE.Group();
-  group.name = "right-hand-hammer";
+  attackEntity(e, dmg, fromPos) {
+    if (e.isBanner) {
+      this.defense.damageBanner(dmg);
+      return;
+    }
+    if (e === this.player) {
+      const actual = Math.max(1, dmg - this.player.defense());
+      if (this.player.takeDamage(actual, fromPos)) {
+        SFX.hurt();
+        if (this.player.hp <= 0) this.playerDown();
+      }
+      return;
+    }
+    // Villager.
+    if (e.takeDamage(dmg, fromPos)) {
+      if (e.hp <= 0) {
+        e.setDown(true);
+        this.ui.toast(`💫 ${e.def.name}が たおれた！`);
+      }
+    }
+  }
 
-  const handleMat = new THREE.MeshToonMaterial({ color: COLORS.hammerGrip });
-  const headMat = new THREE.MeshToonMaterial({ color: COLORS.steel });
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(HAMMER_HANDLE_LENGTH, 0.055, 0.055), handleMat);
-  handle.position.x = -HAMMER_HANDLE_LENGTH / 2;
-  const head = new THREE.Mesh(new THREE.CylinderGeometry(HAMMER_HEAD_RADIUS, HAMMER_HEAD_RADIUS, HAMMER_HEAD_H, 16), headMat);
-  head.position.x = -HAMMER_HANDLE_LENGTH - HAMMER_HEAD_RADIUS + 0.015;
+  healAlliesNear(pos, radius, amount) {
+    for (const e of [this.player, ...this.villagers]) {
+      if (e.down || e.dead) continue;
+      if (e.pos.distanceTo(pos) < radius && e.hp < e.maxHp) {
+        e.hp = Math.min(e.maxHp, e.hp + amount);
+      }
+    }
+  }
 
-  group.add(handle, head);
-  addOutline(handle, 1.12);
-  addOutline(head, 1.08);
-  group.userData.head = head;
-  group.userData.baseY = 0;
-  return group;
-}
+  async playerDown() {
+    if (this.playerDowned) return;
+    this.playerDowned = true;
+    this.ui.toast("💀 目の前が 真っ暗になった……");
+    await this.ui.fade(true, 800);
+    const b = this.bannerEntity.pos;
+    if (b.lengthSq() > 0) this.player.pos.set(b.x, this.world.groundY(Math.floor(b.x), Math.floor(b.z)) + 0.1, b.z + 1);
+    else this.player.pos.set(PLACES.spawn.x + 0.5, this.world.groundY(PLACES.spawn.x, PLACES.spawn.z) + 0.1, PLACES.spawn.z + 0.5);
+    this.player.hp = this.player.maxHp;
+    this.player.vel.set(0, 0, 0);
+    await this.ui.fade(false, 800);
+    this.playerDowned = false;
+  }
 
-function setHammerPose(direction) {
-  const mount = character.leftArm.userData.hammerMount;
-  const armTilt = character.leftArm.userData.tiltGroup.rotation.z;
-  mount.position.set(-HAMMER_GRIP_Y * Math.sin(armTilt), HAMMER_GRIP_Y * Math.cos(armTilt), HAMMER_MOUNT_Z[direction]);
-  updateHammerAttachment();
-}
+  damageBlock(x, y, z, amount) {
+    const key = cellKey(x, y, z);
+    const id = this.world.get(x, y, z);
+    const def = BLOCK_DEFS[id];
+    if (!def?.raidTarget) return;
+    const total = (this.world.blockDamage.get(key) ?? 0) + amount;
+    if (total >= def.hp) {
+      this.world.blockDamage.delete(key);
+      this.world.set(x, y, z, B.AIR);
+      SFX.breakBlock();
+      this.throttledToast("break", `💥 ${def.name}が こわされた！`);
+    } else {
+      this.world.blockDamage.set(key, total);
+    }
+  }
 
-function updateHammerVisibility() {
-  character.hammer.visible = equipment.hammer;
-}
+  throttledToast(kind, text) {
+    const now = performance.now();
+    if ((this.toastCooldowns.get(kind) ?? 0) > now) return;
+    this.toastCooldowns.set(kind, now + 4000);
+    this.ui.toast(text);
+  }
 
-function updateHammerAttachment() {
-  character.leftArm.userData.hammerMount.getWorldPosition(hammerMountWorld);
-  character.group.worldToLocal(hammerMountWorld);
-  character.hammer.position.copy(hammerMountWorld);
-  character.hammer.rotation.set(0.08, 0, HAMMER_DIRECTION_ANGLE[player.direction]);
-  // Orient the cylinder head so its cap strikes the ground in the travel direction
-  // while staying perpendicular to the handle. Handle dir = hammer-local -X spun by
-  // its Z rotation (theta). Strike target = travel-on-screen (FACING: x right,
-  // z toward camera) leaning into the ground (-Y). Project the strike target onto
-  // the plane perpendicular to the handle -> the axis. For a vertical handle the
-  // down part cancels and the cap faces along travel (front/back); for a horizontal
-  // handle the travel part cancels and the cap faces down (left/right); diagonals
-  // blend. Expressed relative to the (already rotated) hammer group.
-  const theta = HAMMER_DIRECTION_ANGLE[player.direction];
-  hammerHandleDir.set(-Math.cos(theta), -Math.sin(theta), 0); // handle points here
-  const [fx, fz] = FACING[player.direction];
-  hammerStrikeDir.set(fx * HAMMER_HEAD_STRIKE_LEAN, -1, fz * HAMMER_HEAD_STRIKE_LEAN);
-  // remove the component along the handle so the axis is exactly perpendicular to it
-  hammerStrikeDir.addScaledVector(hammerHandleDir, -hammerStrikeDir.dot(hammerHandleDir));
-  hammerHeadAxis.copy(hammerStrikeDir).normalize();
-  hammerHeadQuat.setFromUnitVectors(HAMMER_HEAD_UP, hammerHeadAxis);
-  character.hammer.userData.head.quaternion
-    .copy(character.hammer.quaternion)
-    .invert()
-    .multiply(hammerHeadQuat);
-}
+  spawnDrop(item, count, x, y, z) {
+    const drop = new ItemDrop(item, count, x, y, z);
+    this.drops.push(drop);
+    this.scene.add(drop.sprite);
+  }
 
-// Cheap silhouette: a slightly larger back-faced black shell behind the mesh.
-// `scale` is a uniform multiplier. For thin boxes, pass `margin` (world units) to
-// add a roughly constant border on every axis instead — a uniform scale would make
-// the outline on the thin axis (e.g. a short boot) nearly invisible.
-function addOutline(mesh, scale = 1.06, margin = 0) {
-  const outline = new THREE.Mesh(mesh.geometry, outlineMaterial);
-  const p = mesh.geometry.parameters;
-  if (margin > 0 && p && p.width != null) {
-    outline.scale.set(
-      (p.width + 2 * margin) / p.width,
-      (p.height + 2 * margin) / p.height,
-      (p.depth + 2 * margin) / p.depth,
+  // --- farm helpers ------------------------------------------------------------------
+
+  pickFarmCell() {
+    const keys = [...this.cropGrowth.keys()];
+    const pool = keys.length ? keys : [...this.farmland];
+    if (!pool.length) return null;
+    const [x, y, z] = pool[Math.floor(Math.random() * pool.length)].split(",").map(Number);
+    return { x, y: y + 1, z };
+  }
+
+  boostCropsNear(pos, radius, dt) {
+    for (const [key, t] of this.cropGrowth) {
+      const [x, y, z] = key.split(",").map(Number);
+      if (Math.hypot(x + 0.5 - pos.x, z + 0.5 - pos.z) < radius) {
+        this.cropGrowth.set(key, t + dt * (1 / 70) * 3);
+      }
+    }
+  }
+
+  updateCrops(dt) {
+    for (const [key, t] of this.cropGrowth) {
+      const nt = t + dt * (1 / 70);
+      if (nt >= 1) {
+        const [x, y, z] = key.split(",").map(Number);
+        const id = this.world.get(x, y, z);
+        if (id === B.CROP1) this.world.set(x, y, z, B.CROP2);
+        else if (id === B.CROP2) {
+          this.world.set(x, y, z, B.CROP3);
+        }
+      } else {
+        this.cropGrowth.set(key, nt);
+      }
+    }
+  }
+
+  // --- aiming / primary action ---------------------------------------------------------
+
+  updateAim() {
+    this.raycaster.setFromCamera({ x: this.input.mouse.ndcX, y: this.input.mouse.ndcY }, this.camera);
+    const origin = this.raycaster.ray.origin;
+    const dir = this.raycaster.ray.direction;
+    const hit = this.world.raycast(origin, dir, 80);
+    this.aim = null;
+    if (hit) {
+      const cx = hit.x + 0.5;
+      const cz = hit.z + 0.5;
+      const dist = Math.hypot(cx - this.player.pos.x, hit.y + 0.5 - (this.player.pos.y + 0.6), cz - this.player.pos.z);
+      if (dist <= REACH) {
+        this.aim = {
+          cell: { x: hit.x, y: hit.y, z: hit.z },
+          place: { x: hit.x + hit.nx, y: hit.y + hit.ny, z: hit.z + hit.nz },
+          id: hit.id,
+        };
+      }
+    }
+    const held = this.inventory.held();
+    const kind = held ? ITEMS[held.id].kind : null;
+    const showHighlight = !!this.aim && (kind === "tool" || kind === "block" || kind === "seed" || !kind);
+    this.highlight.visible = showHighlight;
+    if (this.aim) {
+      const c = kind === "block" ? this.aim.place : this.aim.cell;
+      this.highlight.position.set(c.x + 0.5, c.y + 0.5, c.z + 0.5);
+      const breaking = this.breakTarget && this.breakProgress > 0;
+      this.highlight.material.color.setHex(breaking ? 0xffb347 : kind === "block" ? 0x9fd8ff : 0xffffff);
+    }
+  }
+
+  primaryAction(dt) {
+    const held = this.inventory.held();
+    const def = held ? ITEMS[held.id] : null;
+    const pressed = this.input.buttonPressed(0);
+    const down = this.input.buttonDown(0);
+
+    // Weapon swing (and bare-hand slap).
+    if (pressed && (!def || def.kind === "weapon" || def.kind === "tool")) {
+      const atk = def?.kind === "weapon" ? def.atk : 1;
+      if (this.player.attackCooldown <= 0) {
+        this.player.attackCooldown = 0.42;
+        this.player.rig.startAttack();
+        SFX.swing();
+        if (this.aim) this.player.faceToward(this.aim.cell.x + 0.5, this.aim.cell.z + 0.5);
+        // Arc hit check.
+        const f = this.player.facing.clone().normalize();
+        for (const m of this.monsters.monsters) {
+          if (m.dead) continue;
+          const dx = m.pos.x - this.player.pos.x;
+          const dz = m.pos.z - this.player.pos.z;
+          const d = Math.hypot(dx, dz);
+          const reach = 1.9 + (m.def.boss ? 1.0 : 0);
+          if (d < reach && Math.abs(m.pos.y - this.player.pos.y) < 1.6) {
+            const dot = (dx * f.x + dz * f.y) / (d || 1);
+            if (dot > 0.25) this.hurtMonster(m, atk, this.player.pos);
+          }
+        }
+      }
+    }
+
+    // Hammer: hold to break blocks.
+    if (def?.kind === "tool") {
+      if (down && this.aim) {
+        const { x, y, z } = this.aim.cell;
+        const key = cellKey(x, y, z);
+        const bdef = BLOCK_DEFS[this.aim.id];
+        if (bdef && bdef.hardness !== Infinity) {
+          if (bdef.tier > def.tier) {
+            this.throttledToast("tier", "🪨 かたすぎる！ 石のハンマーが 必要だ");
+          } else {
+            if (this.breakTarget !== key) {
+              this.breakTarget = key;
+              this.breakProgress = 0;
+            }
+            this.breakProgress += dt * def.speed;
+            this.player.faceToward(x + 0.5, z + 0.5);
+            this.swingTick -= dt;
+            if (this.swingTick <= 0) {
+              this.swingTick = 0.32;
+              this.player.rig.startAttack();
+              SFX.hitBlock();
+            }
+            if (this.breakProgress >= bdef.hardness) {
+              this.breakBlock(x, y, z, bdef);
+              this.breakTarget = null;
+              this.breakProgress = 0;
+            }
+          }
+        }
+      } else {
+        this.breakTarget = null;
+        this.breakProgress = 0;
+      }
+    }
+
+    // Place a block.
+    if (pressed && def?.kind === "block" && this.aim) {
+      const p = this.aim.place;
+      const cur = this.world.get(p.x, p.y, p.z);
+      if ((cur === B.AIR || cur === B.WATER) && this.world.inBounds(p.x, p.y, p.z) && !this.placeBlockedByEntity(p)) {
+        this.world.set(p.x, p.y, p.z, def.block);
+        this.inventory.removeFromSlot(this.inventory.selected, 1);
+        SFX.place();
+        this.player.faceToward(p.x + 0.5, p.z + 0.5);
+        this.quests.onBlockPlaced(held.id);
+      }
+    }
+
+    // Plant seeds on farmland.
+    if (pressed && def?.kind === "seed" && this.aim) {
+      const c = this.aim.cell;
+      if (this.aim.id === B.FARMLAND && this.world.get(c.x, c.y + 1, c.z) === B.AIR) {
+        this.world.set(c.x, c.y + 1, c.z, B.CROP1);
+        this.inventory.removeFromSlot(this.inventory.selected, 1);
+        SFX.place();
+        this.quests.counters.planted += 1;
+      }
+    }
+
+    // Eat.
+    if (pressed && def?.kind === "food") {
+      if (this.player.hp < this.player.maxHp) {
+        this.player.hp = Math.min(this.player.maxHp, this.player.hp + def.heal);
+        this.inventory.removeFromSlot(this.inventory.selected, 1);
+        SFX.eat();
+        this.ui.toast(`${def.icon} ${def.name}を食べた（HP+${def.heal}）`);
+      } else {
+        this.throttledToast("full", "おなかは すいていない");
+      }
+    }
+  }
+
+  placeBlockedByEntity(p) {
+    for (const e of [this.player, ...this.villagers, ...this.monsters.monsters]) {
+      if (
+        Math.abs(e.pos.x - (p.x + 0.5)) < e.halfW + 0.5 &&
+        Math.abs(e.pos.z - (p.z + 0.5)) < e.halfW + 0.5 &&
+        e.pos.y < p.y + 1 &&
+        e.pos.y + e.height > p.y
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  breakBlock(x, y, z, bdef) {
+    const id = this.world.get(x, y, z);
+    this.world.set(x, y, z, B.AIR);
+    SFX.breakBlock();
+    const cx = x + 0.5, cy = y + 0.4, cz = z + 0.5;
+    if (id === B.CROP3) {
+      this.harvestCrop(cx, cy, cz);
+      return;
+    }
+    if (id === B.CROP1 || id === B.CROP2) {
+      this.spawnDrop("seed", 1, cx, cy, cz);
+      return;
+    }
+    if (bdef.drops) this.spawnDrop(bdef.drops, 1, cx, cy, cz);
+    if (bdef.bonusDrops) {
+      for (const [item, p] of bdef.bonusDrops) {
+        if (Math.random() < p) this.spawnDrop(item, 1, cx, cy, cz);
+      }
+    }
+  }
+
+  harvestCrop(cx, cy, cz) {
+    this.spawnDrop("rice", 1, cx, cy, cz);
+    this.spawnDrop("rice", 1, cx, cy, cz);
+    if (Math.random() < 0.7) this.spawnDrop("seed", 1, cx, cy, cz);
+    this.quests.counters.harvested += 1;
+    SFX.pickup();
+  }
+
+  // --- interact ---------------------------------------------------------------------
+
+  interact() {
+    // Villagers first.
+    let nearest = null;
+    let nearestD = 2.6;
+    for (const v of this.villagers) {
+      const d = v.pos.distanceTo(this.player.pos);
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = v;
+      }
+    }
+    if (nearest) {
+      nearest.facePlayer(this.player.pos);
+      this.player.faceToward(nearest.pos.x, nearest.pos.z);
+      if (!this.quests.onTalk(nearest.id)) this.smallTalk(nearest);
+      return;
+    }
+    // Props under the cursor.
+    if (!this.aim) return;
+    const { x, y, z } = this.aim.cell;
+    const def = BLOCK_DEFS[this.aim.id];
+    switch (def?.interact) {
+      case "craft":
+        this.ui.openMenu(this.menuCtx(true));
+        break;
+      case "sleep":
+        this.trySleep();
+        break;
+      case "harvest":
+        this.world.set(x, y, z, B.AIR);
+        this.harvestCrop(x + 0.5, y + 0.4, z + 0.5);
+        break;
+      case "altar":
+        if (!this.quests.onAltarPrayed()) this.ui.toast("🙏 しずかな気配がする……");
+        break;
+      case "banner":
+        this.ui.toast(`🚩 拠点レベル${this.baseLevel}　この旗が 町のしるしだ`);
+        break;
+      default:
+        break;
+    }
+  }
+
+  smallTalk(v) {
+    const lines = {
+      pino: [
+        "「おれ、いつか自分の家を建てるんだ。もちろん自分の手でな！」",
+        "「ハンマーの音って、なんかいいよな。生きてるって感じがする」",
+      ],
+      mina: [
+        "「お米、育ててるとね、雨の音まで好きになるんだよ」",
+        "「おにぎりはね、心の形なんだって。おばあちゃんが言ってた」",
+      ],
+      gonta: [
+        "「北の山には銅の鉱石が眠ってる。石のハンマーを忘れるなよ」",
+        "「夜はこうもりが増える。たいまつがあると心強いぜ」",
+      ],
+      jinbei: [
+        "「ダーマ神殿……わしも若いころ、転職の儀を受けたもんじゃ」",
+        "「町がにぎやかになると、老いぼれの骨まで温まるわい」",
+      ],
+    };
+    const pool = lines[v.id] ?? ["「……」"];
+    const text = pool[Math.floor(Math.random() * pool.length)];
+    this.quests.busy = true;
+    this.ui.dialogue.play([{ speaker: v.def.name, text }], () => {
+      this.quests.busy = false;
+    });
+  }
+
+  async trySleep() {
+    if (this.defense.active) {
+      this.ui.toast("⚔️ 戦いの最中に 眠れるわけがない！");
+      return;
+    }
+    if (!this.daynight.isEvening && !this.daynight.isNight) {
+      this.ui.toast("☀️ まだ眠くない。夕方になったら休もう");
+      return;
+    }
+    SFX.sleep();
+    await this.ui.fade(true, 700);
+    this.daynight.sleep();
+    this.player.hp = this.player.maxHp;
+    for (const v of this.villagers) v.hp = v.maxHp;
+    // A fresh morning: clear ambient monsters.
+    for (const m of [...this.monsters.monsters]) {
+      if (!m.raid) this.monsters.remove(m);
+    }
+    this.autosave();
+    await this.ui.fade(false, 700);
+    this.ui.toast("🌅 朝になった（HP全回復・セーブしました）");
+  }
+
+  menuCtx(forceBench = false) {
+    let nearBench = forceBench;
+    if (!nearBench) {
+      for (const key of this.workbenches) {
+        const [x, y, z] = key.split(",").map(Number);
+        if (Math.hypot(x + 0.5 - this.player.pos.x, z + 0.5 - this.player.pos.z) < 3.5 && Math.abs(y - this.player.pos.y) < 3) {
+          nearBench = true;
+          break;
+        }
+      }
+    }
+    return {
+      inventory: this.inventory,
+      nearBench,
+      stageIdx: stageIndex(this.quests.stage),
+      stageIndexOf: stageIndex,
+    };
+  }
+
+  jobBookData() {
+    const bp = this.blueprints.completed;
+    const built = [this.workbenches.size > 0, bp.has("hut"), bp.has("farm"), bp.has("shrine")].filter(Boolean).length;
+    const c = this.quests.counters;
+    const farmerRevived = stageIndex(this.quests.stage) >= stageIndex("PREPARE");
+    return [
+      {
+        name: "ビルダーの書",
+        desc: "すべての職業の根にある原初の書。建てることは、生きること。",
+        progress: built / 4,
+        revived: true,
+      },
+      {
+        name: "農民の書",
+        desc: farmerRevived
+          ? "ミナの手で よみがえった。土と水と、まごころの書。"
+          : "白紙のページ……。畑を作り、共に働けば 文字は戻るはず。",
+        progress: farmerRevived ? 1 : Math.min(1, (Math.min(8, c.planted) / 8) * 0.5 + (Math.min(8, c.harvested) / 8) * 0.5),
+        revived: farmerRevived,
+      },
+    ];
+  }
+
+  // --- per-frame ---------------------------------------------------------------------
+
+  handleInput(dt) {
+    const { input } = this;
+    input.enabled = !this.ui.modalOpen && this.started;
+
+    // Global keys that work with menus open.
+    if (input.rawPressed("escape")) {
+      if (this.ui.menuOpen) this.ui.closeMenu();
+      else if (!this.ui.pause.classList.contains("hidden")) this.ui.hidePause();
+      else if (this.started && !this.ui.dialogue.open) this.ui.showPause(() => writeSave(this), null);
+    }
+    if (input.rawPressed("e") && this.started && !this.ui.dialogue.open) {
+      if (this.ui.menuOpen) this.ui.closeMenu();
+      else if (!this.ui.modalOpen) this.ui.openMenu(this.menuCtx());
+    }
+    if (input.rawPressed("b") && this.started && !this.ui.dialogue.open) {
+      if (this.ui.bookOverlay.classList.contains("hidden")) this.ui.showJobBook(this.jobBookData());
+      else this.ui.hideJobBook();
+    }
+    if (input.rawPressed("m")) {
+      const muted = SFX.toggleMute();
+      this.ui.toast(muted ? "🔇 サウンドOFF" : "🔊 サウンドON");
+    }
+
+    if (!input.enabled) return;
+
+    // Camera rotation (8 directions).
+    if (input.pressed("q") || input.pressed("[")) this.cameraYawTarget += CAMERA_ROTATE_STEP;
+    if (input.pressed("]")) this.cameraYawTarget -= CAMERA_ROTATE_STEP;
+
+    // Hotbar.
+    for (let i = 0; i < 8; i += 1) {
+      if (input.pressed(String(i + 1))) {
+        this.inventory.selected = i;
+        this.ui.setHotbar(this.inventory);
+      }
+    }
+    const wheel = input.consumeWheel();
+    if (wheel !== 0) {
+      this.inventory.selected = (this.inventory.selected + wheel + 8) % 8;
+      this.ui.setHotbar(this.inventory);
+    }
+
+    if (input.pressed("f") || input.rawButtonPressed(2)) this.interact();
+
+    this.primaryAction(dt);
+  }
+
+  updateCamera(dt) {
+    // Shortest-path smooth rotation toward the stepped target yaw.
+    let diff = this.cameraYawTarget - this.cameraYaw;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    this.cameraYaw += diff * Math.min(1, dt * 10);
+
+    const target = this.player.pos.clone();
+    target.y += 0.9;
+    const full = target.clone().add(
+      new THREE.Vector3(
+        Math.sin(this.cameraYaw) * CAMERA_RADIUS,
+        CAMERA_HEIGHT,
+        Math.cos(this.cameraYaw) * CAMERA_RADIUS,
+      ),
     );
-  } else {
-    outline.scale.multiplyScalar(scale);
-  }
-  outline.renderOrder = (mesh.renderOrder || 0) - 1;
-  mesh.add(outline);
-  return outline;
-}
-
-// --- movement / state ---------------------------------------------------------
-
-function tryStartMove() {
-  const screenInput = getScreenInputVector();
-  if (!screenInput) {
-    setPlayerState("idle");
-    return;
+    // Occlusion auto-zoom: if terrain (e.g. tree canopy) blocks the view line,
+    // pull the camera in front of the blocker; ease back out when clear.
+    const viewDir = full.clone().sub(target);
+    const viewLen = viewDir.length();
+    viewDir.normalize();
+    const hit = this.world.raycast(target, viewDir, viewLen);
+    const wantZoom = hit ? Math.max(0.22, (hit.dist - 0.7) / viewLen) : 1;
+    const zoomRate = wantZoom < this.camZoom ? 14 : 2.2; // snap in, ease out
+    this.camZoom += (wantZoom - this.camZoom) * Math.min(1, dt * zoomRate);
+    const desired = target.clone().addScaledVector(viewDir, viewLen * this.camZoom);
+    const alpha = 1 - Math.exp(-CAMERA_FOLLOW_RATE * dt);
+    this.camera.position.lerp(desired, alpha);
+    this.camera.lookAt(target);
   }
 
-  const nextDirection = INPUT_TO_DIRECTION.get(`${screenInput.x},${screenInput.z}`);
-  player.direction = nextDirection;
-  setHybridDirection(nextDirection);
-
-  const worldDelta = getCameraRelativeGridDelta(screenInput);
-  const target = { x: player.grid.x + worldDelta.x, z: player.grid.z + worldDelta.z };
-  if (!canMoveTo(player.grid, target, worldDelta)) {
-    setPlayerState("idle");
-    return;
+  applySky() {
+    const s = this.daynight.sample();
+    this.scene.background.setHex(s.sky);
+    this.scene.fog.color.setHex(s.sky);
+    this.hemiLight.intensity = s.hemi;
+    this.sunLight.intensity = s.sun;
   }
 
-  // Entry velocity: cruise (1) if this segment continues a walk already in motion,
-  // otherwise ease in from rest (0).
-  player.segEntryVel = player.state === "walking" ? 1 : 0;
-  // Exit velocity: cruise (1) if the same input would carry us into a valid next
-  // tile, so we pass through the boundary at speed; otherwise ease out to a stop.
-  // (If the key is released mid-segment we just finish at cruise and stop once —
-  // a single stop, not the per-tile pulsing this avoids.)
-  const nextTarget = { x: target.x + worldDelta.x, z: target.z + worldDelta.z };
-  player.segExitVel = canMoveTo(target, nextTarget, worldDelta) ? 1 : 0;
+  frame(dt) {
+    const time = performance.now() / 1000;
 
-  player.moving = true;
-  player.moveElapsed = 0;
-  player.moveStart.copy(playerRoot.position);
-  player.moveEnd.set(gridToWorld(target.x), getPlayerGroundY(target.x, target.z), gridToWorld(target.z));
-  player.grid = target;
-  setPlayerState("walking");
-}
+    if (this.started) {
+      this.handleInput(dt);
 
-// Hermite interpolation of segment progress with the two endpoint velocities.
-// m0=m1=0 -> smoothstep (isolated step); m0=0,m1=1 -> ease-in only; m0=1,m1=0 ->
-// ease-out only; m0=m1=1 -> linear (constant-speed cruise). Adjacent segments that
-// share a velocity (e.g. both 1) therefore join without a velocity discontinuity.
-function easeSegment(t, m0, m1) {
-  const t2 = t * t;
-  const t3 = t2 * t;
-  return (t3 - 2 * t2 + t) * m0 + (-2 * t3 + 3 * t2) + (t3 - t2) * m1;
-}
+      // Player movement.
+      let move = null;
+      if (this.input.enabled) {
+        const x = (this.input.down("d") || this.input.down("arrowright") ? 1 : 0) - (this.input.down("a") || this.input.down("arrowleft") ? 1 : 0);
+        const z = (this.input.down("s") || this.input.down("arrowdown") ? 1 : 0) - (this.input.down("w") || this.input.down("arrowup") ? 1 : 0);
+        if (x !== 0 || z !== 0) move = { x, z };
+      }
+      const wantJump = this.input.down(" ");
+      this.player.update(dt, this.world, move, this.cameraYaw, wantJump);
 
-function updateMovement(delta) {
-  player.moveElapsed += delta;
+      this.updateAim();
+      this.daynight.update(dt);
+      this.updateCrops(dt);
 
-  // Cross any completed tile boundaries, carrying the leftover time into the next
-  // segment so continuous walking doesn't lose a sliver of a frame at each tile.
-  while (player.moving && player.moveElapsed >= MOVE_DURATION) {
-    const overshoot = player.moveElapsed - MOVE_DURATION;
-    playerRoot.position.copy(player.moveEnd);
-    snapPlayerToGrid();
-    player.moving = false;
-    if (getScreenInputVector()) {
-      tryStartMove();
-      if (player.moving) {
-        player.moveElapsed = overshoot;
+      // Monsters.
+      const mctx = {
+        world: this.world,
+        player: this.player,
+        villagers: this.villagers,
+        bannerEntity: this.bannerEntity,
+        bannerPos: this.bannerEntity.pos,
+        cameraYaw: this.cameraYaw,
+        isNight: this.daynight.isNight,
+        time,
+        basePos: { x: PLACES.base.x, z: PLACES.base.z },
+        attackEntity: (e, dmg, from) => this.attackEntity(e, dmg, from),
+        hurtMonster: (m, dmg, from) => this.hurtMonster(m, dmg, from),
+        damageBlock: (x, y, z, n) => this.damageBlock(x, y, z, n),
+      };
+      if (stageIndex(this.quests.stage) >= stageIndex("BUILD_HUT") && !this.defense.active) {
+        this.monsters.updateAmbient(dt, mctx);
+      }
+      this.monsters.update(dt, mctx);
+      this.defense.update(dt, this.ui);
+
+      // Villagers.
+      const vctx = {
+        world: this.world,
+        cameraYaw: this.cameraYaw,
+        raidActive: this.defense.active,
+        monsters: this.monsters.monsters,
+        bannerPos: this.bannerEntity.pos,
+        farmWork: this.blueprints.completed.has("farm"),
+        time,
+        hurtMonster: (m, dmg, from) => this.hurtMonster(m, dmg, from),
+        healAlliesNear: (pos, r, n) => this.healAlliesNear(pos, r, n),
+        pickFarmCell: () => this.pickFarmCell(),
+        boostCropsNear: (pos, r, d) => this.boostCropsNear(pos, r, d),
+      };
+      for (const v of this.villagers) v.update(dt, vctx);
+
+      // Drops.
+      for (const drop of [...this.drops]) {
+        drop.update(dt, this.world, this.player.pos);
+        if (drop.collected) {
+          this.inventory.add(drop.itemId, drop.count);
+          SFX.pickup();
+          this.scene.remove(drop.sprite);
+          this.drops.splice(this.drops.indexOf(drop), 1);
+        }
+      }
+
+      this.quests.update();
+
+      // HUD.
+      this.ui.setHp(this.player.hp, this.player.maxHp);
+      this.ui.setClock(this.daynight.clockText());
+      if (this.defense.active) {
+        const boss = this.defense.boss && !this.defense.boss.dead ? this.defense.boss : null;
+        this.ui.setRaid(true, this.defense.bannerHp, this.defense.bannerMaxHp, boss?.hp, boss?.maxHp);
+      } else {
+        this.ui.setRaid(false);
+      }
+      const bp = this.blueprints.active;
+      if (bp) {
+        const remaining = this.blueprints.remainingMaterials();
+        const total = bp.cells.length;
+        const done = bp.cells.filter((c) => !c.ghost.visible).length;
+        this.ui.setBlueprint(bp.name, remaining, done, total);
+      } else {
+        this.ui.setBlueprint(null);
+      }
+
+      // Autosave.
+      this.autosaveTimer -= dt;
+      if (this.autosaveTimer <= 0) {
+        this.autosaveTimer = 30;
+        this.autosave();
       }
     } else {
-      setPlayerState("idle");
+      // Title: slow orbit around the island.
+      this.cameraYawTarget += dt * 0.05;
     }
+
+    this.applySky();
+    this.props.update(dt, this.player.pos, this.daynight.isNight);
+    this.blueprints.update(time);
+    this.chunks.flushDirty();
+    this.updateCamera(dt);
+    this.input.endFrame();
+    this.renderer.render(this.scene, this.camera);
   }
-
-  if (player.moving) {
-    const t = Math.min(player.moveElapsed / MOVE_DURATION, 1);
-    const eased = easeSegment(t, player.segEntryVel, player.segExitVel);
-    playerRoot.position.lerpVectors(player.moveStart, player.moveEnd, eased);
-    updateShadowPosition();
-  }
 }
 
-function getScreenInputVector() {
-  const x = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
-  const z = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
-  if (x === 0 && z === 0) {
-    return null;
-  }
-  return { x, z };
-}
-
-function getCameraRelativeGridDelta(screenInput) {
-  const cameraForward = new THREE.Vector3();
-  camera.getWorldDirection(cameraForward);
-  cameraForward.y = 0;
-  cameraForward.normalize();
-
-  const screenDown = cameraForward.multiplyScalar(-1);
-  const cameraRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-  cameraRight.y = 0;
-  cameraRight.normalize();
-
-  const worldVector = cameraRight.multiplyScalar(screenInput.x).add(screenDown.multiplyScalar(screenInput.z));
-  return quantizeWorldVector(worldVector);
-}
-
-function quantizeWorldVector(vector) {
-  if (vector.lengthSq() === 0) {
-    return { x: 0, z: 0 };
-  }
-
-  vector.normalize();
-  const threshold = 0.38;
-  const x = Math.abs(vector.x) < threshold ? 0 : Math.sign(vector.x);
-  const z = Math.abs(vector.z) < threshold ? 0 : Math.sign(vector.z);
-  return { x, z };
-}
-
-function canMoveTo(from, to, delta) {
-  if (!canStepBetween(from, to)) {
-    return false;
-  }
-
-  if (delta.x !== 0 && delta.z !== 0) {
-    const sideX = { x: from.x + delta.x, z: from.z };
-    const sideZ = { x: from.x, z: from.z + delta.z };
-    return canStepBetween(from, sideX) && canStepBetween(from, sideZ);
-  }
-
-  return true;
-}
-
-function canStepBetween(from, to) {
-  if (!isInsideMap(to.x, to.z)) {
-    return false;
-  }
-
-  const currentHeight = getHeight(from.x, from.z);
-  const targetHeight = getHeight(to.x, to.z);
-  return targetHeight >= 1 && Math.abs(targetHeight - currentHeight) <= 1;
-}
-
-function setPlayerState(state) {
-  if (player.state === state) {
-    return;
-  }
-  player.state = state;
-}
-
-function setHybridDirection(direction) {
-  const frame = DIRECTIONS[direction];
-  const c = ART_CENTERS[direction];
-  setCellWindow(headTexture, frame, c.h - HEAD_HALF_U, c.h + HEAD_HALF_U, HEAD_V.v0, HEAD_V.v1);
-  setCellWindow(bodyTexture, frame, c.b - BODY_HALF_U, c.b + BODY_HALF_U, BODY_V.v0, BODY_V.v1);
-  setLimbLayout(direction);
-  setHammerPose(direction);
-}
-
-// Map a sub-rectangle (0..1 within one direction cell) onto a texture's UV transform.
-function setCellWindow(texture, frame, u0, u1, v0, v1) {
-  const cellW = 1 / 4;
-  const cellH = 1 / 2;
-  const cellBottomV = 1 - (frame.row + 1) * cellH;
-  texture.repeat.set(cellW * (u1 - u0), cellH * (v1 - v0));
-  texture.offset.set(frame.col * cellW + cellW * u0, cellBottomV + cellH * v0);
-}
-
-// Place both arms and legs for all 8 directions: separated along the axis
-// perpendicular to facing, with the front-back component compressed so the thin
-// character's limbs don't splay out in depth on profile views.
-function setLimbLayout(direction) {
-  const [fx, fz] = FACING[direction];
-  const sx = fz; // perpendicular-to-facing, screen-x component
-  const sz = -fx * LIMB_DEPTH_SCALE; // perpendicular, depth component (compressed)
-  character.leftLeg.position.set(-sx * LEG_SEP, HIP_Y + LEG_LIFT, -sz * LEG_SEP);
-  character.rightLeg.position.set(sx * LEG_SEP, HIP_Y + LEG_LIFT, sz * LEG_SEP);
-  character.leftArm.position.set(-sx * ARM_SEP, SHOULDER_Y, -sz * ARM_SEP);
-  character.rightArm.position.set(sx * ARM_SEP, SHOULDER_Y, sz * ARM_SEP);
-  // Back/diagonal-back views swap the arms' screen sides, so the fixed rest tilt
-  // would point inward. Re-aim the splay outward based on each arm's current side.
-  const screenSide = Math.sign(sx); // left arm sits at -sx, right arm at +sx
-  character.leftArm.userData.tiltGroup.rotation.z = -screenSide * ARM_REST_TILT;
-  character.rightArm.userData.tiltGroup.rotation.z = screenSide * ARM_REST_TILT;
-}
-
-function snapPlayerToGrid() {
-  playerRoot.position.set(gridToWorld(player.grid.x), getPlayerGroundY(player.grid.x, player.grid.z), gridToWorld(player.grid.z));
-  updateShadowPosition();
-}
-
-function updateShadowPosition() {
-  const groundHeight = getHeight(player.grid.x, player.grid.z);
-  playerShadow.position.set(playerRoot.position.x, groundHeight + 0.018, playerRoot.position.z);
-}
-
-function getPlayerGroundY(x, z) {
-  return getHeight(x, z) + CHAR_CLEARANCE;
-}
-
-function updateCamera(immediate, delta = 0) {
-  const target = playerRoot.position.clone();
-  target.y += 0.55;
-  const desiredPosition = target.clone().add(
-    new THREE.Vector3(
-      Math.sin(cameraOrbit.yaw) * CAMERA_RADIUS,
-      CAMERA_HEIGHT,
-      Math.cos(cameraOrbit.yaw) * CAMERA_RADIUS,
-    ),
-  );
-
-  if (immediate) {
-    camera.position.copy(desiredPosition);
-  } else {
-    // Frame-rate-independent exponential smoothing: the fraction covered this frame
-    // depends on elapsed time, so the follow speed is the same at 30, 60 or 144 fps.
-    const alpha = 1 - Math.exp(-CAMERA_FOLLOW_RATE * delta);
-    camera.position.lerp(desiredPosition, alpha);
-  }
-
-  camera.lookAt(target);
-}
-
-function updateCharacterFacing() {
-  // Fixed quarter-view yaw toward the camera (no full billboarding) so the thin
-  // boxes show real thickness. The 8-direction sprite still swaps frames.
-  playerBillboard.rotation.set(0, cameraOrbit.yaw, 0);
-}
-
-function rotateCamera(steps) {
-  cameraOrbit.yaw = normalizeAngle(cameraOrbit.yaw + steps * CAMERA_ROTATE_STEP);
-  updateCamera(true);
-  updateCharacterFacing();
-}
-
-function normalizeAngle(angle) {
-  const fullTurn = Math.PI * 2;
-  return ((angle % fullTurn) + fullTurn) % fullTurn;
-}
-
-// Light deformed-doll motion: bob + limb swing while walking, tiny breathing idle.
-function updatePlayerAnimation() {
-  const walking = player.state === "walking";
-  const phase = Math.sin(player.walkTime * WALK_ANIM_SPEED);
-  const idle = Math.sin(player.animTime * 2.2);
-
-  // Swing limbs fore/aft ALONG the facing direction so legs/arms read as walking
-  // in every direction (incl. profile). The axis is horizontal and perpendicular
-  // to facing; left/right and arm/leg use opposite phase.
-  const [fx, fz] = FACING[player.direction];
-  swingAxis.set(-fz, 0, fx).normalize();
-
-  const legSwing = walking ? phase * 0.55 : 0;
-  const armSwing = walking ? phase * 0.5 : idle * 0.05;
-  character.leftLeg.quaternion.setFromAxisAngle(swingAxis, legSwing);
-  character.rightLeg.quaternion.setFromAxisAngle(swingAxis, -legSwing);
-  character.leftArm.quaternion.setFromAxisAngle(swingAxis, -armSwing);
-  character.rightArm.quaternion.setFromAxisAngle(swingAxis, armSwing);
-
-  const bob = walking ? Math.abs(phase) * 0.045 : (idle + 1) * 0.5 * 0.018;
-  const headBob = bob + (walking ? Math.abs(phase) * 0.02 : idle * 0.008);
-  character.body.group.position.y = BODY_CY + bob;
-  character.head.group.position.y = HEAD_CY + headBob;
-  character.leftArm.position.y = SHOULDER_Y + bob;
-  character.rightArm.position.y = SHOULDER_Y + bob;
-  updateHammerAttachment();
-}
-
-function updateDebug() {
-  debugGrid.textContent = `${player.grid.x}, ${player.grid.z}, h=${getHeight(player.grid.x, player.grid.z)}`;
-  debugDirection.textContent = player.direction;
-  debugState.textContent = player.state;
-}
-
-function getHeight(x, z) {
-  return terrainHeights[z]?.[x] ?? 0;
-}
-
-function isInsideMap(x, z) {
-  return x >= 0 && x < MAP_SIZE && z >= 0 && z < MAP_SIZE;
-}
-
-function gridToWorld(value) {
-  return (value - MAP_SIZE / 2 + 0.5) * TILE_SIZE;
-}
-
-function normalizeKey(key) {
-  return key.toLowerCase();
-}
-
-function isMovementKey(key) {
-  return ["w", "a", "s", "d", "arrowup", "arrowleft", "arrowdown", "arrowright"].includes(normalizeKey(key));
-}
-
-function getCameraRotateDirection(event) {
-  if (event.code === "BracketLeft" || event.key === "[" || event.key === "{") {
-    return -1;
-  }
-  if (event.code === "BracketRight" || event.key === "]" || event.key === "}") {
-    return 1;
-  }
-  return 0;
-}
+new Game();

@@ -1,7 +1,8 @@
 # AGENT.md
 
-このプロジェクトは `builder-sprite-lab`、Vite + three.js + WebGL のブラウザゲーム検証用プロトタイプです。
-実装の全体像・調整パラメータは [README.md](README.md) を参照してください。
+このプロジェクトは Vite + three.js + WebGL のブラウザゲーム
+「職をつぐ者 〜ジパング復興編〜」（ドラゴンクエストビルダーズ・オマージュ）です。
+実装の全体像・操作方法は [README.md](README.md) を参照してください。
 
 ## 最優先ルール
 

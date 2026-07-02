@@ -3,30 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Builder Sprite Lab</title>
+    <title>職をつぐ者 〜ジパング復興編〜</title>
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./src/style.css" />
-    <script type="importmap">
-      {
-        "imports": {
-          "three": "./node_modules/three/build/three.module.js"
-        }
-      }
-    </script>
   </head>
   <body>
     <div id="app"></div>
-    <div id="debug-panel">
-      <strong>Builder Sprite Lab</strong>
-      <div>Grid: <span id="debug-grid">-</span></div>
-      <div>Direction: <span id="debug-direction">front</span></div>
-      <div>State: <span id="debug-state">idle</span></div>
-      <label class="toggle-row" for="hammer-toggle">
-        <span>Hammer</span>
-        <input id="hammer-toggle" type="checkbox" checked />
-        <span class="toggle-track" aria-hidden="true"></span>
-      </label>
-      <div class="controls">WASD / Arrow keys: move | [ ]: rotate camera</div>
-    </div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>
