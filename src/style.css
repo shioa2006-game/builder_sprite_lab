@@ -27,6 +27,22 @@ body {
   z-index: 10;
 }
 
+/* Underwater tint (shown while the player is submerged). */
+.underwater {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(90, 170, 230, 0.12), rgba(18, 62, 120, 0.55) 95%);
+  box-shadow: inset 0 0 240px 60px rgba(8, 34, 78, 0.7);
+}
+
+.underwater.active {
+  opacity: 1;
+}
+
 /* --- DQB-style window ------------------------------------------------------- */
 .panel,
 .dialogue,
