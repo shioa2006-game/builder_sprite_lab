@@ -5,7 +5,7 @@ import { B, BLOCK_DEFS } from "./world/blocks.js";
 import { VoxelWorld, WORLD, PLACES } from "./world/world.js";
 import { ChunkRenderer } from "./world/mesher.js";
 import { PropRenderer } from "./world/props.js";
-import { ITEMS, Inventory } from "./game/items.js";
+import { ITEMS, Inventory, itemForBlock } from "./game/items.js";
 import { QuestManager, stageIndex } from "./game/quests.js";
 import { DayNight } from "./game/daynight.js";
 import { BlueprintManager } from "./game/blueprints.js";
@@ -425,8 +425,23 @@ class Game {
         };
       }
     }
+    // Blueprint build target: the empty ghost cell directly under the cursor. Any
+    // held item works (auto-snap places the block that cell needs), so building is
+    // just "click the glowing outlines".
+    this.aimGhost = this.pickGhostCell();
+
     const held = this.inventory.held();
     const kind = held ? ITEMS[held.id].kind : null;
+
+    if (this.aimGhost) {
+      // Highlight the ghost we'd fill, in a build colour.
+      this.highlight.visible = true;
+      const c = this.aimGhost;
+      this.highlight.position.set(c.x + 0.5, c.y + 0.5, c.z + 0.5);
+      this.highlight.material.color.setHex(0xffe08a);
+      return;
+    }
+
     const showHighlight = !!this.aim && (kind === "tool" || kind === "block" || kind === "seed" || !kind);
     this.highlight.visible = showHighlight;
     if (this.aim) {
@@ -437,11 +452,63 @@ class Game {
     }
   }
 
+  // The nearest still-empty blueprint ghost cell under the cursor, within reach.
+  // Returns the cell {x,y,z,block} or null. Obstacle cells (occupied by a wrong
+  // block, e.g. a tree) are skipped here — they must be cleared with the hammer.
+  pickGhostCell() {
+    const bp = this.blueprints.active;
+    if (!bp) return null;
+    const meshes = [];
+    for (const cell of bp.cells) {
+      if (!cell.ghost.visible) continue;
+      if (this.world.get(cell.x, cell.y, cell.z) !== B.AIR) continue; // obstacle / filled
+      cell.ghost.userData.cell = cell;
+      meshes.push(cell.ghost);
+    }
+    if (!meshes.length) return null;
+    this.raycaster.setFromCamera({ x: this.input.mouse.ndcX, y: this.input.mouse.ndcY }, this.camera);
+    const hits = this.raycaster.intersectObjects(meshes, false);
+    for (const hit of hits) {
+      const cell = hit.object.userData.cell;
+      const d = Math.hypot(
+        cell.x + 0.5 - this.player.pos.x,
+        cell.y + 0.5 - (this.player.pos.y + 0.6),
+        cell.z + 0.5 - this.player.pos.z,
+      );
+      if (d <= REACH) return cell;
+    }
+    return null;
+  }
+
+  // Place the block a ghost cell requires, consumed from anywhere in the inventory.
+  fillGhostCell(cell) {
+    if (!cell) return;
+    const itemId = itemForBlock(cell.block);
+    if (!itemId) return;
+    if (!this.inventory.has(itemId)) {
+      this.throttledToast("bpmat", `📦 ${ITEMS[itemId].name} が足りない`);
+      return;
+    }
+    this.inventory.remove(itemId, 1);
+    this.world.set(cell.x, cell.y, cell.z, cell.block);
+    SFX.place();
+    this.player.faceToward(cell.x + 0.5, cell.z + 0.5);
+    this.quests.onBlockPlaced(itemId);
+  }
+
   primaryAction(dt) {
     const held = this.inventory.held();
     const def = held ? ITEMS[held.id] : null;
     const pressed = this.input.buttonPressed(0);
     const down = this.input.buttonDown(0);
+
+    // Blueprint auto-snap: clicking a glowing ghost cell fills it with exactly the
+    // block that cell needs, taken from anywhere in the inventory. No need to
+    // select the right item or aim precisely — just click the outlines.
+    if (this.aimGhost) {
+      if (pressed) this.fillGhostCell(this.aimGhost);
+      return; // don't also attack / place while targeting a build ghost
+    }
 
     // Weapon swing (and bare-hand slap).
     if (pressed && (!def || def.kind === "weapon" || def.kind === "tool")) {

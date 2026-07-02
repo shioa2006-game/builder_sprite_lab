@@ -162,14 +162,20 @@ export class BlueprintManager {
     }
   }
 
-  // A cell is satisfied when the world block matches the requirement.
+  // A cell is satisfied when the world block matches the requirement. Cells that
+  // are blocked by a wrong solid block (e.g. a tree trunk in the footprint) are
+  // flagged as obstacles and coloured red so the player knows to clear them.
   refresh() {
     const bp = this.active;
     if (!bp || bp.done) return;
     let remaining = 0;
     for (const cell of bp.cells) {
-      const ok = this.world.get(cell.x, cell.y, cell.z) === cell.block;
+      const world = this.world.get(cell.x, cell.y, cell.z);
+      const ok = world === cell.block;
       cell.ghost.visible = !ok;
+      const obstacle = !ok && world !== B.AIR && world !== B.WATER;
+      cell.obstacle = obstacle;
+      cell.ghost.material.color.setHex(obstacle ? 0xff5a4a : GHOST_COLORS[cell.block] ?? 0xffffff);
       if (!ok) remaining += 1;
     }
     if (remaining === 0) {
@@ -203,8 +209,9 @@ export class BlueprintManager {
   update(time) {
     if (!this.active) return;
     const pulse = 0.22 + (Math.sin(time * 3) + 1) * 0.09;
+    const obstaclePulse = 0.4 + (Math.sin(time * 6) + 1) * 0.15; // brighter, faster = "clear me"
     for (const cell of this.active.cells) {
-      if (cell.ghost.visible) cell.ghost.material.opacity = pulse;
+      if (cell.ghost.visible) cell.ghost.material.opacity = cell.obstacle ? obstaclePulse : pulse;
     }
     if (this.active.beam) {
       this.active.beam.material.opacity = 0.22 + (Math.sin(time * 2) + 1) * 0.07;
