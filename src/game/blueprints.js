@@ -116,10 +116,14 @@ export class BlueprintManager {
       });
       const ghost = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.92, 0.92), mat);
       ghost.position.set(x + 0.5, y + 0.5, z + 0.5);
+      // Edge wireframe drawn with depthTest off so a still-empty cell's outline is
+      // visible THROUGH placed blocks (roof/walls) — the last hidden floor/interior
+      // cells stay findable instead of being buried under the structure.
       const edge = new THREE.LineSegments(
         new THREE.EdgesGeometry(ghost.geometry),
-        new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }),
+        new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthTest: false }),
       );
+      edge.renderOrder = 6;
       ghost.add(edge);
       group.add(ghost);
       return { x, y, z, block: c.block, ghost };
@@ -176,6 +180,9 @@ export class BlueprintManager {
       const obstacle = !ok && world !== B.AIR && world !== B.WATER;
       cell.obstacle = obstacle;
       cell.ghost.material.color.setHex(obstacle ? 0xff5a4a : GHOST_COLORS[cell.block] ?? 0xffffff);
+      // Edge wireframe (drawn through walls): red for obstacles, gold otherwise.
+      const edge = cell.ghost.children[0];
+      if (edge) edge.material.color.setHex(obstacle ? 0xff5a4a : 0xffe08a);
       if (!ok) remaining += 1;
     }
     if (remaining === 0) {
