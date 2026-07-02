@@ -822,6 +822,13 @@ class Game {
       const wantJump = this.input.down(" ");
       this.player.update(dt, this.world, move, this.cameraYaw, wantJump);
 
+      // Show the held hammer / weapon in the hero's hand (other items = bare hands).
+      const heldSlot = this.inventory.held();
+      const heldDef = heldSlot ? ITEMS[heldSlot.id] : null;
+      this.player.rig.setTool(
+        heldDef && (heldDef.kind === "tool" || heldDef.kind === "weapon") ? heldSlot.id : null,
+      );
+
       this.updateAim();
       this.daynight.update(dt);
       this.updateCrops(dt);
