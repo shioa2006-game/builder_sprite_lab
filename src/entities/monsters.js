@@ -303,7 +303,7 @@ export class MonsterManager {
       const distBase = Math.hypot(x - ctx.basePos.x, z - ctx.basePos.z);
       const distPlayer = Math.hypot(x - ctx.player.pos.x, z - ctx.player.pos.z);
       if (distBase < 17 || distPlayer < 9) continue;
-      const y = ctx.world.groundY(x, z);
+      const y = ctx.world.terrainSurfaceY(x, z); // real ground, not a tree canopy
       if (y <= WORLD.WATER_LEVEL + 1) continue; // no spawning in the sea
       const type = ctx.isNight && Math.random() < 0.45 ? "bat" : "slime";
       this.spawn(type, x + 0.5, y + (type === "bat" ? 2 : 0.1), z + 0.5);

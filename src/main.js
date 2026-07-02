@@ -75,7 +75,7 @@ class Game {
     // --- entities --------------------------------------------------------------------
     this.player = new Player(this.scene);
     const sp = PLACES.spawn;
-    this.player.pos.set(sp.x + 0.5, this.world.groundY(sp.x, sp.z) + 0.1, sp.z + 0.5);
+    this.player.pos.set(sp.x + 0.5, this.world.terrainSurfaceY(sp.x, sp.z) + 0.1, sp.z + 0.5);
     this.villagers = [];
     this.monsters = new MonsterManager(this.scene);
     this.drops = [];
@@ -244,7 +244,7 @@ class Game {
 
   spawnVillager(id, x, z, y = null) {
     if (this.villager(id)) return this.villager(id);
-    const gy = y ?? this.world.groundY(Math.floor(x), Math.floor(z)) + 0.1;
+    const gy = y ?? this.world.terrainSurfaceY(x, z) + 0.1;
     const v = new Villager(id, x + 0.001, gy, z + 0.001);
     this.villagers.push(v);
     this.scene.add(v.root);
@@ -257,7 +257,7 @@ class Game {
 
   placeBanner() {
     const { x, z } = PLACES.banner;
-    const y = this.world.groundY(x, z);
+    const y = this.world.terrainSurfaceY(x, z);
     this.world.set(x, y, z, B.BANNER);
   }
 
@@ -333,8 +333,8 @@ class Game {
     this.ui.toast("💀 目の前が 真っ暗になった……");
     await this.ui.fade(true, 800);
     const b = this.bannerEntity.pos;
-    if (b.lengthSq() > 0) this.player.pos.set(b.x, this.world.groundY(Math.floor(b.x), Math.floor(b.z)) + 0.1, b.z + 1);
-    else this.player.pos.set(PLACES.spawn.x + 0.5, this.world.groundY(PLACES.spawn.x, PLACES.spawn.z) + 0.1, PLACES.spawn.z + 0.5);
+    if (b.lengthSq() > 0) this.player.pos.set(b.x, this.world.terrainSurfaceY(b.x, b.z) + 0.1, b.z + 1);
+    else this.player.pos.set(PLACES.spawn.x + 0.5, this.world.terrainSurfaceY(PLACES.spawn.x, PLACES.spawn.z) + 0.1, PLACES.spawn.z + 0.5);
     this.player.hp = this.player.maxHp;
     this.player.vel.set(0, 0, 0);
     await this.ui.fade(false, 800);

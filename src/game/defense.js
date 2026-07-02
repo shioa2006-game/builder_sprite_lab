@@ -47,7 +47,7 @@ export class DefenseEvent {
         gateIndex += 1;
         const x = gate.x + (Math.random() - 0.5) * 4;
         const z = gate.z + (Math.random() - 0.5) * 4;
-        const y = this.world.groundY(Math.floor(x), Math.floor(z));
+        const y = this.world.terrainSurfaceY(x, z);
         const m = this.monsters.spawn(type, x, y + (type === "bat" ? 2 : 0.2), z, { raid: true });
         if (type === "boss") this.boss = m;
       }
