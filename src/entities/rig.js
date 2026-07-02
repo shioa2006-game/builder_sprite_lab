@@ -132,47 +132,175 @@ function toonMat(color) {
   return new THREE.MeshToonMaterial({ color });
 }
 
-export function createToolMesh(kind) {
-  const group = new THREE.Group();
-  if (kind === "hammer_wood" || kind === "hammer_stone") {
-    const steel = kind === "hammer_stone" ? 0x8b9196 : 0xaeb6bb;
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.055, 0.055), toonMat(0xaa0000));
-    handle.position.x = -0.18;
-    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.25, 16), toonMat(steel));
-    head.position.x = -0.36 - 0.075 + 0.015;
-    group.add(handle, head);
-    addOutline(handle, 1.12);
+// Each tool gets its own procedural model built from primitives, toon-shaded with
+// black outlines so it matches the character art. Hammer heads keep their striking
+// axis on local Y (userData.hammerHead) for the 8-direction strike orientation.
+const TOOL_BUILDERS = {
+  hammer_wood(group) {
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.033, 0.38, 8), toonMat(0x9c6b35));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.x = -0.19;
+    const gripWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.09, 8), toonMat(0x6d4522));
+    gripWrap.rotation.z = Math.PI / 2;
+    gripWrap.position.x = -0.05;
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.26, 12), toonMat(0xc99c5f));
+    head.position.x = -0.42;
+    // Dark end rings so the mallet caps read clearly.
+    for (const y of [-0.11, 0.11]) {
+      const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.084, 0.084, 0.03, 12), toonMat(0x7c5730));
+      ring.position.y = y;
+      head.add(ring);
+    }
+    group.add(handle, gripWrap, head);
+    addOutline(handle, 1.14);
     addOutline(head, 1.08);
     group.userData.hammerHead = head;
-  } else if (kind === "club") {
-    const club = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.09, 0.5, 10), toonMat(0x8a5a2c));
-    club.rotation.z = Math.PI / 2;
-    club.position.x = -0.25;
-    group.add(club);
-    addOutline(club, 1.1);
-  } else if (kind === "sword_stone" || kind === "sword_copper") {
-    const bladeColor = kind === "sword_copper" ? 0xd08a4a : 0xb9c0c6;
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.03), toonMat(bladeColor));
-    blade.position.x = -0.3;
-    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.052, 0.12, 4), toonMat(bladeColor));
+  },
+  hammer_stone(group) {
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.036, 0.4, 8), toonMat(0x6d4a26));
+    handle.rotation.z = Math.PI / 2;
+    handle.position.x = -0.2;
+    // Straw rope lashing where the stone head is bound to the shaft.
+    const lash1 = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.035, 8), toonMat(0xc2a557));
+    lash1.rotation.z = Math.PI / 2;
+    lash1.position.x = -0.33;
+    // Angular chiselled stone head (striking faces on local +/-Y).
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.3, 0.13), toonMat(0x8b9196));
+    head.position.x = -0.44;
+    for (const y of [-0.13, 0.13]) {
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(0.145, 0.045, 0.145), toonMat(0x70767b));
+      cap.position.y = y;
+      head.add(cap);
+    }
+    const chip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.02), toonMat(0x9aa1a6));
+    chip.position.set(0.045, 0.02, 0.066);
+    head.add(chip);
+    group.add(handle, lash1, head);
+    addOutline(handle, 1.14);
+    addOutline(head, 1.08);
+    group.userData.hammerHead = head;
+  },
+  club(group) {
+    // Fat knotted club with studs, thin grip and a pommel knob.
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.045, 0.42, 10), toonMat(0x8a5a2c));
+    body.rotation.z = Math.PI / 2;
+    body.position.x = -0.33;
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.04, 0.16, 8), toonMat(0x6d4522));
+    grip.rotation.z = Math.PI / 2;
+    grip.position.x = -0.08;
+    const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), toonMat(0x5a3a1c));
+    pommel.position.x = 0.01;
+    for (const [angle, off] of [[0, -0.42], [2.1, -0.36], [4.2, -0.46]]) {
+      const stud = new THREE.Mesh(new THREE.ConeGeometry(0.028, 0.06, 6), toonMat(0x5a3a1c));
+      stud.position.set(off, Math.cos(angle) * 0.085, Math.sin(angle) * 0.085);
+      stud.rotation.x = angle + Math.PI / 2;
+      group.add(stud);
+    }
+    group.add(body, grip, pommel);
+    addOutline(body, 1.1);
+    addOutline(grip, 1.14);
+    addOutline(pommel, 1.12);
+  },
+  sword_stone(group) {
+    // Rough-hewn stone blade: chunky, layered, with a leather-wrapped grip.
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.11, 0.045), toonMat(0xa8b0b5));
+    blade.position.x = -0.31;
+    const ridge = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.045, 0.055), toonMat(0x8b9196));
+    ridge.position.x = -0.28;
+    const notch = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.045, 0.05), toonMat(0x70767b));
+    notch.position.set(-0.36, 0.045, 0);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.058, 0.14, 4), toonMat(0xa8b0b5));
     tip.rotation.z = Math.PI / 2;
     tip.rotation.y = Math.PI / 4;
-    tip.position.x = -0.56;
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.06), toonMat(0x8a6a2a));
-    guard.position.x = -0.1;
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.05), toonMat(0x5f3d1c));
-    grip.position.x = -0.03;
-    group.add(blade, tip, guard, grip);
+    tip.position.x = -0.55;
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.2, 0.07), toonMat(0x6d4a26));
+    guard.position.x = -0.12;
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.13, 8), toonMat(0x40301d));
+    grip.rotation.z = Math.PI / 2;
+    grip.position.x = -0.05;
+    for (const x of [-0.08, -0.045, -0.01]) {
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.037, 0.037, 0.02, 8), toonMat(0x2c2014));
+      band.rotation.z = Math.PI / 2;
+      band.position.x = x;
+      group.add(band);
+    }
+    group.add(blade, ridge, notch, tip, guard, grip);
     addOutline(blade, 1.1);
+    addOutline(tip, 1.1);
     addOutline(guard, 1.12);
-  }
+  },
+  sword_copper(group) {
+    // Broad copper blade with bright edges, winged gold guard and red-wrapped grip.
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.03), toonMat(0xc97b3f));
+    blade.position.x = -0.34;
+    for (const y of [-0.055, 0.055]) {
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.022, 0.034), toonMat(0xe8a86a));
+      edge.position.set(-0.34, y, 0);
+      group.add(edge);
+    }
+    const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.026, 0.034), toonMat(0x9c5a2c));
+    fuller.position.x = -0.31;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.062, 0.16, 4), toonMat(0xd08a4a));
+    tip.rotation.z = Math.PI / 2;
+    tip.rotation.y = Math.PI / 4;
+    tip.position.x = -0.61;
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.08), toonMat(0xd9b545));
+    guard.position.x = -0.13;
+    for (const y of [-0.12, 0.12]) {
+      const wing = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 8), toonMat(0xd9b545));
+      wing.position.set(-0.13, y, 0);
+      group.add(wing);
+    }
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.14, 8), toonMat(0xa03024));
+    grip.rotation.z = Math.PI / 2;
+    grip.position.x = -0.05;
+    for (const x of [-0.085, -0.05, -0.015]) {
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.039, 0.039, 0.02, 8), toonMat(0x701c14));
+      band.rotation.z = Math.PI / 2;
+      band.position.x = x;
+      group.add(band);
+    }
+    const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), toonMat(0xd9b545));
+    pommel.position.x = 0.02;
+    group.add(blade, fuller, tip, guard, grip, pommel);
+    addOutline(blade, 1.08);
+    addOutline(tip, 1.1);
+    addOutline(guard, 1.12);
+    addOutline(pommel, 1.12);
+  },
+};
+
+export function createToolMesh(kind) {
+  const group = new THREE.Group();
+  TOOL_BUILDERS[kind]?.(group);
   return group;
 }
 
 // --- humanoid rig ---------------------------------------------------------------
 
-const tmpColor = new THREE.Color();
 const UNDERWATER_COLOR = new THREE.Color(0x2a6fb0);
+
+// Gather every tintable material under a node (skipping shared outline/hidden
+// materials) with its base color, for the underwater submersion tint.
+function collectTintTargets(node) {
+  const out = [];
+  node.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      if (m === outlineMaterial || m === hiddenFaceMaterial || !m.color) continue;
+      out.push({ m, base: m.color.clone() });
+    }
+  });
+  return out;
+}
+
+function applyTint(targets, frac) {
+  for (const t of targets) {
+    t.m.color.copy(t.base).lerp(UNDERWATER_COLOR, frac * 0.62).multiplyScalar(1 - frac * 0.22);
+  }
+}
+
 const tmpMount = new THREE.Vector3();
 const tmpSwingAxis = new THREE.Vector3();
 const tmpHandleDir = new THREE.Vector3();
@@ -213,15 +341,8 @@ export class HumanoidRig {
 
     // Collect this rig's own tintable materials (sprite fronts + limbs) with their
     // base colors, so we can shift them toward an underwater blue when submerged.
-    this._tint = [];
-    this.inner.traverse((o) => {
-      if (!o.isMesh || !o.material) return;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      for (const m of mats) {
-        if (m === outlineMaterial || m === hiddenFaceMaterial || !m.color) continue;
-        this._tint.push({ m, base: m.color.clone() });
-      }
-    });
+    this._tint = collectTintTargets(this.inner);
+    this._toolTint = []; // rebuilt whenever the held tool changes
     this._submersion = 0;
 
     this.setDirection("front");
@@ -233,9 +354,8 @@ export class HumanoidRig {
     frac = Math.max(0, Math.min(1, frac));
     if (Math.abs(frac - this._submersion) < 0.01) return;
     this._submersion = frac;
-    for (const t of this._tint) {
-      t.m.color.copy(t.base).lerp(UNDERWATER_COLOR, frac * 0.62).multiplyScalar(1 - frac * 0.22);
-    }
+    applyTint(this._tint, frac);
+    applyTint(this._toolTint, frac);
   }
 
   createHead() {
@@ -297,11 +417,14 @@ export class HumanoidRig {
     if (this.tool) {
       this.inner.remove(this.tool);
       this.tool = null;
+      this._toolTint = [];
     }
     this.toolKind = kind;
     if (kind) {
       this.tool = createToolMesh(kind);
       this.inner.add(this.tool);
+      this._toolTint = collectTintTargets(this.tool);
+      if (this._submersion > 0) applyTint(this._toolTint, this._submersion);
       this.updateToolMount();
       this.updateToolAttachment();
     }
