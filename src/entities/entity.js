@@ -38,24 +38,36 @@ export class Entity {
     return false;
   }
 
-  moveWithCollision(world, dt) {
+  // stepHeight > 0 lets the entity auto-climb a low ledge when a horizontal move
+  // is blocked (used for swimming out of water: the shore bank is 1 block high and
+  // the weak in-water jump can't clear it via the horizontal-first collision order).
+  moveWithCollision(world, dt, stepHeight = 0) {
     const { pos, vel } = this;
-    // X
-    let nx = pos.x + vel.x * dt;
-    if (this.collides(world, nx, pos.y, pos.z)) {
-      nx = pos.x;
+    let stepped = false;
+    // Try to move `pos[axis]` to `target`; if blocked, optionally step up onto a ledge.
+    const tryAxis = (axis) => {
+      const target = pos[axis] + vel[axis] * dt;
+      const probe = { x: pos.x, y: pos.y, z: pos.z };
+      probe[axis] = target;
+      if (!this.collides(world, probe.x, probe.y, probe.z)) {
+        pos[axis] = target;
+        return;
+      }
+      if (stepHeight > 0 && !stepped) {
+        for (let lift = 0.5; lift <= stepHeight + 1e-3; lift += 0.5) {
+          if (!this.collides(world, probe.x, pos.y + lift, probe.z)) {
+            pos.y += lift;
+            pos[axis] = target;
+            stepped = true;
+            return;
+          }
+        }
+      }
       this.hitWall = true;
-      vel.x = 0;
-    }
-    pos.x = nx;
-    // Z
-    let nz = pos.z + vel.z * dt;
-    if (this.collides(world, pos.x, pos.y, nz)) {
-      nz = pos.z;
-      this.hitWall = true;
-      vel.z = 0;
-    }
-    pos.z = nz;
+      vel[axis] = 0;
+    };
+    tryAxis("x");
+    tryAxis("z");
     // Y
     this.onGround = false;
     let ny = pos.y + vel.y * dt;

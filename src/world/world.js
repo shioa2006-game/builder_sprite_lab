@@ -74,6 +74,17 @@ export class VoxelWorld {
     return this.get(x, y, z) === B.WATER;
   }
 
+  // World Y of the water surface in a column (top of the highest water cell), or
+  // null if the column has no water. Used for swim buoyancy.
+  waterSurfaceY(x, z) {
+    const xi = Math.floor(x);
+    const zi = Math.floor(z);
+    for (let y = WORLD.H - 1; y >= 0; y -= 1) {
+      if (this.get(xi, y, zi) === B.WATER) return y + 1;
+    }
+    return null;
+  }
+
   // Amanatides & Woo voxel traversal. Returns {x,y,z,id,nx,ny,nz,dist} or null.
   raycast(origin, dir, maxDist) {
     let x = Math.floor(origin.x);
