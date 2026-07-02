@@ -181,10 +181,11 @@ class Game {
     if (data.blueprint) {
       const anchors = { hut: PLACES.hut, farm: PLACES.farm, shrine: PLACES.shrine };
       const anchor = anchors[data.blueprint.id];
+      const anchorOff = data.blueprint.id === "shrine" ? 2 : 1;
       this.blueprints.activate(
         data.blueprint.id,
         anchor,
-        this.world.groundY(anchor.x + 2, anchor.z + 1) - (data.blueprint.id === "farm" ? 0 : 0),
+        this.world.terrainSurfaceY(anchor.x + 2, anchor.z + anchorOff),
       );
     }
     this.rescanWorld();

@@ -124,8 +124,33 @@ export class BlueprintManager {
       group.add(ghost);
       return { x, y, z, block: c.block, ghost };
     });
+
+    // Locator beacon: a tall soft beam of light at the footprint centre so the
+    // build site is findable from across the island (blueprints sit at fixed
+    // spots that can be far from the player when they activate).
+    let sx = 0, sz = 0;
+    for (const c of cells) {
+      sx += c.x;
+      sz += c.z;
+    }
+    const cx = sx / cells.length + 0.5;
+    const cz = sz / cells.length + 0.5;
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.45, 0.6, 24, 10, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xffe08a,
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    beam.position.set(cx, baseY + 12, cz);
+    beam.renderOrder = 3;
+    group.add(beam);
+
     this.scene.add(group);
-    this.active = { id, name: def.name, cells, group, done: false };
+    this.active = { id, name: def.name, cells, group, beam, done: false };
     this.refresh();
     return this.active;
   }
@@ -180,6 +205,10 @@ export class BlueprintManager {
     const pulse = 0.22 + (Math.sin(time * 3) + 1) * 0.09;
     for (const cell of this.active.cells) {
       if (cell.ghost.visible) cell.ghost.material.opacity = pulse;
+    }
+    if (this.active.beam) {
+      this.active.beam.material.opacity = 0.22 + (Math.sin(time * 2) + 1) * 0.07;
+      this.active.beam.rotation.y = time * 0.3;
     }
   }
 }

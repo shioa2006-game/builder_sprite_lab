@@ -163,7 +163,7 @@ export class QuestManager {
         ],
         () => {
           this.busy = false;
-          this.game.blueprints.activate("hut", PLACES.hut, this.game.world.groundY(PLACES.hut.x + 2, PLACES.hut.z + 1));
+          this.game.blueprints.activate("hut", PLACES.hut, this.game.world.terrainSurfaceY(PLACES.hut.x + 2, PLACES.hut.z + 1));
           this.setStage("BUILD_HUT");
         },
       );
@@ -246,7 +246,7 @@ export class QuestManager {
         ],
         () => {
           this.busy = false;
-          this.game.blueprints.activate("farm", PLACES.farm, this.game.world.groundY(PLACES.farm.x + 2, PLACES.farm.z + 1));
+          this.game.blueprints.activate("farm", PLACES.farm, this.game.world.terrainSurfaceY(PLACES.farm.x + 2, PLACES.farm.z + 1));
           this.setStage("BUILD_FARM");
         },
       );
@@ -325,7 +325,7 @@ export class QuestManager {
           this.game.blueprints.activate(
             "shrine",
             PLACES.shrine,
-            this.game.world.groundY(PLACES.shrine.x + 2, PLACES.shrine.z + 2),
+            this.game.world.terrainSurfaceY(PLACES.shrine.x + 2, PLACES.shrine.z + 2),
           );
           this.setStage("BUILD_SHRINE");
         },
