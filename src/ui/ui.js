@@ -14,6 +14,13 @@ export class UI {
     const root = el("div", "ui-root", document.body);
     this.root = root;
 
+    // Underwater tint. Prepended so it paints under the HUD; toggled while the
+    // player's head is below the water surface (the fixed quarter camera stays
+    // above water, so this is how "being submerged" is communicated).
+    this.underwater = document.createElement("div");
+    this.underwater.className = "underwater";
+    root.prepend(this.underwater);
+
     // HUD ---------------------------------------------------------------------
     this.hud = el("div", "hud", root);
     this.hearts = el("div", "hearts", this.hud);
@@ -148,6 +155,10 @@ export class UI {
     bossLabel.classList.toggle("hidden", !showBoss);
     bossBar.classList.toggle("hidden", !showBoss);
     if (showBoss) this.raidBar.querySelector(".boss-fill").style.width = `${(bossHp / bossMax) * 100}%`;
+  }
+
+  setUnderwater(active) {
+    this.underwater.classList.toggle("active", active);
   }
 
   toast(text, duration = 3600) {

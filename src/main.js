@@ -876,6 +876,14 @@ class Game {
 
       this.quests.update();
 
+      // Underwater tint: on when the player's head is below the water surface.
+      let submerged = false;
+      if (this.player.inWater) {
+        const surf = this.world.waterSurfaceY(this.player.pos.x, this.player.pos.z);
+        if (surf != null && this.player.pos.y + 1.0 < surf - 0.05) submerged = true;
+      }
+      this.ui.setUnderwater(submerged);
+
       // HUD.
       this.ui.setHp(this.player.hp, this.player.maxHp);
       this.ui.setClock(this.daynight.clockText());
