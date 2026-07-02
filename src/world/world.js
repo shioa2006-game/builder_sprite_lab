@@ -74,6 +74,20 @@ export class VoxelWorld {
     return this.get(x, y, z) === B.WATER;
   }
 
+  // Ground surface Y ignoring tree foliage (logs/leaves), for placing structures
+  // and blueprints flush on the terrain even under an overhanging canopy (plain
+  // groundY would return the leaf ceiling and float the building in mid-air).
+  terrainSurfaceY(x, z) {
+    const xi = Math.floor(x);
+    const zi = Math.floor(z);
+    for (let y = WORLD.H - 1; y >= 0; y -= 1) {
+      const id = this.get(xi, y, zi);
+      if (id === B.LOG || id === B.LEAVES) continue;
+      if (id !== B.AIR && BLOCK_DEFS[id]?.solid === true) return y + 1;
+    }
+    return 1;
+  }
+
   // Top surface Y of the first real ground block at or below `fromY` in a column.
   // Used for shadows so an entity under a tree casts its shadow on the ground it
   // stands on, not on the canopy above it (groundY scans from the very top and
