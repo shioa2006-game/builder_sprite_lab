@@ -5,14 +5,12 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        entryFileNames: "assets/app.js",
-        chunkFileNames: "assets/[name].js",
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.name?.endsWith(".css")) {
-            return "assets/app.css";
-          }
-          return "assets/[name][extname]";
-        },
+        // Content-hashed filenames so every deploy busts the browser cache. With
+        // fixed names (app.js/app.css) browsers kept serving the old cached build
+        // after an update, and changes never appeared without a hard refresh.
+        entryFileNames: "assets/[name]-[hash].js",
+        chunkFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
       },
     },
   },
