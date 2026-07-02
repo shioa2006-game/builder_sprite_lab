@@ -174,7 +174,12 @@ export class VoxelWorld {
         // Shrine ledge on the mountain slope.
         const hd = Math.hypot(x - (PLACES.shrine.x + 3), z - (PLACES.shrine.z + 2));
         if (hd < 7) h = lerp(11, h, clamp((hd - 4.5) / 2.5, 0, 1));
-        heights[z * W + x] = clamp(Math.round(h), 1, H - 8);
+        let hh = clamp(Math.round(h), 1, H - 8);
+        // Carve a proper basin around the island: columns at/below the waterline
+        // that are clearly open sea drop to the sea floor, so the ocean is a solid
+        // ~3-deep body instead of see-through 1-block shallows that read as land.
+        if (hh <= WORLD.WATER_LEVEL && land < 0.4) hh = 1;
+        heights[z * W + x] = hh;
       }
     }
 
