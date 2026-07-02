@@ -149,7 +149,8 @@ export class ItemDrop {
       this.vel.y += GRAVITY * 0.6 * dt;
     }
     this.pos.addScaledVector(this.vel, dt);
-    const ground = world.groundY(Math.floor(this.pos.x), Math.floor(this.pos.z)) + 0.3;
+    // Rest on the ground beneath the drop, not on a tree canopy overhead.
+    const ground = world.groundYBelow(this.pos.x, this.pos.z, this.pos.y + 0.5) + 0.3;
     if (this.pos.y < ground) {
       this.pos.y = ground;
       this.vel.y = 0;

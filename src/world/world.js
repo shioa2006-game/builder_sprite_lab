@@ -253,10 +253,11 @@ export class VoxelWorld {
       }
     }
 
-    // A few starter trees close to spawn so the first quest flows.
-    this.plantTree(29, this.groundY(29, 51), 51, rand);
-    this.plantTree(37, this.groundY(37, 52), 52, rand);
-    this.plantTree(35, this.groundY(35, 49), 49, rand);
+    // A few starter trees close to spawn so the first quest flows. Use the real
+    // terrain surface so an overhang from a nearby tree can't float the trunk.
+    this.plantTree(29, this.terrainSurfaceY(29, 51), 51, rand);
+    this.plantTree(37, this.terrainSurfaceY(37, 52), 52, rand);
+    this.plantTree(35, this.terrainSurfaceY(35, 49), 49, rand);
 
     this.pristine = this.data.slice();
   }
